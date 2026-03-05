@@ -2,7 +2,7 @@
   "name": "voice-scribe",
   "displayName": "Voice Scribe",
   "description": "High-quality real-time voice-to-text for VS Code with live rewriting",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "1vecera",
   "icon": "images/icon.png",
   "engines": {
@@ -172,6 +172,18 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/1vecera/vscode-voice-scribe.git"
+  },
+  "homepage": "https://github.com/1vecera/vscode-voice-scribe#readme",
+  "bugs": {
+    "url": "https://github.com/1vecera/vscode-voice-scribe/issues"
+  },
+  "author": {
+    "name": "1vecera",
+    "url": "https://github.com/1vecera"
+  },
+  "galleryBanner": {
+    "color": "#1a1a2e",
+    "theme": "dark"
   },
   "license": "MIT"
 }

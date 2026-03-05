@@ -39,10 +39,10 @@ Search **"Voice Scribe"** in the extensions panel, or install from [Open VSX](ht
 
 ```bash
 # VS Code
-curl -sL https://github.com/1vecera/vscode-voice-scribe/releases/download/v0.1.0/voice-scribe-0.1.0.vsix -o /tmp/voice-scribe.vsix && code --install-extension /tmp/voice-scribe.vsix
+curl -sL https://github.com/1vecera/vscode-voice-scribe/releases/latest/download/voice-scribe.vsix -o /tmp/voice-scribe.vsix && code --install-extension /tmp/voice-scribe.vsix
 
 # Cursor
-curl -sL https://github.com/1vecera/vscode-voice-scribe/releases/download/v0.1.0/voice-scribe-0.1.0.vsix -o /tmp/voice-scribe.vsix && cursor --install-extension /tmp/voice-scribe.vsix
+curl -sL https://github.com/1vecera/vscode-voice-scribe/releases/latest/download/voice-scribe.vsix -o /tmp/voice-scribe.vsix && cursor --install-extension /tmp/voice-scribe.vsix
 ```
 
 ### Build from source
@@ -53,7 +53,8 @@ cd vscode-voice-scribe
 npm install
 npm run compile
 npx @vscode/vsce package
-code --install-extension voice-scribe-0.1.0.vsix
+npx @vscode/vsce package
+code --install-extension voice-scribe-*.vsix
 ```
 
 ## Usage
