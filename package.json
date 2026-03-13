@@ -2,7 +2,7 @@
   "name": "voice-scribe",
   "displayName": "Voice Scribe",
   "description": "High-quality real-time voice-to-text for VS Code with live rewriting",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "1vecera",
   "icon": "images/icon.png",
   "engines": {
