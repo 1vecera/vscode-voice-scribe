@@ -50,13 +50,12 @@ export class ElevenLabsService {
             try {
                 // ── Build URL with REQUIRED query params ────────────────
                 const config = vscode.workspace.getConfiguration('voiceScribe');
-                const language = config.get<string>('language') || 'en';
+                const language = config.get<string>('language') || 'auto';
                 log(`Language: ${language}`);
 
                 const params = new URLSearchParams({
                     model_id: 'scribe_v2_realtime',   // REQUIRED
                     audio_format: 'pcm_16000',        // 16 kHz 16-bit LE mono
-                    language_code: language,
                     commit_strategy: 'vad',           // auto-commit on silence
                     // ── Aggressive rewrite tuning ────────────────────
                     vad_silence_threshold_secs: '0.8', // commit faster (default 1.5)
@@ -64,6 +63,11 @@ export class ElevenLabsService {
                     min_speech_duration_ms: '50',      // catch short words
                     min_silence_duration_ms: '50',     // react faster to pauses
                 });
+                // Only set language_code when a specific language is chosen;
+                // omitting it lets the API auto-detect the spoken language.
+                if (language !== 'auto') {
+                    params.set('language_code', language);
+                }
                 const wsUrl = `wss://api.elevenlabs.io/v1/speech-to-text/realtime?${params}`;
 
                 log(`Connecting to ${wsUrl}`);

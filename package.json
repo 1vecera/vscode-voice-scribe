@@ -22,7 +22,8 @@
   ],
   "activationEvents": [
     "onCommand:voiceScribe.startRecording",
-    "onCommand:voiceScribe.configureApiKey"
+    "onCommand:voiceScribe.configureApiKey",
+    "onCommand:voiceScribe.selectLanguage"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -38,6 +39,10 @@
       {
         "command": "voiceScribe.configureApiKey",
         "title": "Voice Scribe: Configure API Key"
+      },
+      {
+        "command": "voiceScribe.selectLanguage",
+        "title": "Voice Scribe: Select Language"
       }
     ],
     "configuration": {
@@ -50,8 +55,9 @@
         },
         "voiceScribe.language": {
           "type": "string",
-          "default": "en",
+          "default": "auto",
           "enum": [
+            "auto",
             "en",
             "zh",
             "es",
@@ -88,6 +94,7 @@
             "tl"
           ],
           "enumDescriptions": [
+            "Auto-detect (let the API detect the spoken language)",
             "English",
             "Chinese",
             "Spanish",
@@ -123,7 +130,7 @@
             "Vietnamese",
             "Filipino"
           ],
-          "description": "Language for speech recognition (ISO 639-1 code)"
+          "description": "Language you are speaking in for transcription (ISO 639-1 code). Set to 'auto' to let the API detect your language automatically."
         }
       }
     },

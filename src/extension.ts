@@ -62,9 +62,15 @@ export function activate(context: vscode.ExtensionContext) {
         () => configureApiKey()
     );
 
+    const selectLanguageCommand = vscode.commands.registerCommand(
+        'voiceScribe.selectLanguage',
+        () => selectLanguage()
+    );
+
     context.subscriptions.push(startRecordingCommand);
     context.subscriptions.push(stopRecordingCommand);
     context.subscriptions.push(configureApiKeyCommand);
+    context.subscriptions.push(selectLanguageCommand);
 
     // Listen for configuration changes
     context.subscriptions.push(
@@ -255,6 +261,64 @@ async function handleCommitted(text: string) {
     clearLiveDecoration(editor);
     liveStart = null;
     liveRange = null;
+}
+
+async function selectLanguage() {
+    const languages: { label: string; code: string }[] = [
+        { label: '$(globe) Auto-detect', code: 'auto' },
+        { label: 'English', code: 'en' },
+        { label: 'Chinese', code: 'zh' },
+        { label: 'Spanish', code: 'es' },
+        { label: 'Hindi', code: 'hi' },
+        { label: 'Portuguese', code: 'pt' },
+        { label: 'Russian', code: 'ru' },
+        { label: 'Japanese', code: 'ja' },
+        { label: 'German', code: 'de' },
+        { label: 'French', code: 'fr' },
+        { label: 'Italian', code: 'it' },
+        { label: 'Korean', code: 'ko' },
+        { label: 'Dutch', code: 'nl' },
+        { label: 'Polish', code: 'pl' },
+        { label: 'Swedish', code: 'sv' },
+        { label: 'Turkish', code: 'tr' },
+        { label: 'Czech', code: 'cs' },
+        { label: 'Danish', code: 'da' },
+        { label: 'Finnish', code: 'fi' },
+        { label: 'Greek', code: 'el' },
+        { label: 'Hungarian', code: 'hu' },
+        { label: 'Norwegian', code: 'no' },
+        { label: 'Romanian', code: 'ro' },
+        { label: 'Slovak', code: 'sk' },
+        { label: 'Ukrainian', code: 'uk' },
+        { label: 'Bulgarian', code: 'bg' },
+        { label: 'Croatian', code: 'hr' },
+        { label: 'Catalan', code: 'ca' },
+        { label: 'Tamil', code: 'ta' },
+        { label: 'Arabic', code: 'ar' },
+        { label: 'Malay', code: 'ms' },
+        { label: 'Indonesian', code: 'id' },
+        { label: 'Thai', code: 'th' },
+        { label: 'Vietnamese', code: 'vi' },
+        { label: 'Filipino', code: 'tl' },
+    ];
+
+    const config = vscode.workspace.getConfiguration('voiceScribe');
+    const current = config.get<string>('language') || 'auto';
+
+    const items = languages.map(l => ({
+        label: l.label,
+        description: l.code === current ? '(current)' : l.code,
+        code: l.code,
+    }));
+
+    const picked = await vscode.window.showQuickPick(items, {
+        placeHolder: `Select transcription language (current: ${current})`,
+    });
+
+    if (picked) {
+        await config.update('language', picked.code, vscode.ConfigurationTarget.Global);
+        vscode.window.showInformationMessage(`Voice Scribe language set to ${picked.label}`);
+    }
 }
 
 async function configureApiKey() {
