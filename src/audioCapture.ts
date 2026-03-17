@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, execSync, ChildProcess } from 'child_process';
+import * as fs from 'fs';
 
 /**
  * Native audio capture using ffmpeg
@@ -9,14 +10,53 @@ export class AudioCapture {
     private ffmpegProcess: ChildProcess | null = null;
     private isRecording = false;
     private onAudioChunk: ((chunk: Buffer) => void) | null = null;
+    private ffmpegPath: string = 'ffmpeg';
+
+    /**
+     * Resolve the full path to ffmpeg.
+     * VSCode GUI apps on macOS don't inherit the shell PATH,
+     * so we check common locations and fall back to shell resolution.
+     */
+    private resolveFfmpegPath(): string {
+        // Common install locations by platform
+        const candidates: string[] = process.platform === 'darwin'
+            ? ['/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg']
+            : process.platform === 'win32'
+                ? ['C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe', 'C:\\ffmpeg\\bin\\ffmpeg.exe']
+                : ['/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/snap/bin/ffmpeg'];
+
+        for (const candidate of candidates) {
+            if (fs.existsSync(candidate)) {
+                return candidate;
+            }
+        }
+
+        // Fall back: ask the user's login shell where ffmpeg is
+        try {
+            const shell = process.env.SHELL || '/bin/zsh';
+            const resolved = execSync(`${shell} -ilc "which ffmpeg"`, {
+                timeout: 5000,
+                encoding: 'utf-8',
+            }).trim();
+            if (resolved && fs.existsSync(resolved)) {
+                return resolved;
+            }
+        } catch {
+            // ignore – will use bare 'ffmpeg' as last resort
+        }
+
+        return 'ffmpeg';
+    }
 
     async initialize(onAudioChunk: (chunk: Buffer) => void): Promise<void> {
         this.onAudioChunk = onAudioChunk;
-        
+        this.ffmpegPath = this.resolveFfmpegPath();
+        console.log('Resolved ffmpeg path:', this.ffmpegPath);
+
         // Verify ffmpeg is available
         return new Promise((resolve, reject) => {
-            const testProcess = spawn('ffmpeg', ['-version']);
-            
+            const testProcess = spawn(this.ffmpegPath, ['-version']);
+
             testProcess.on('error', (_error) => {
                 vscode.window.showErrorMessage(
                     'ffmpeg not found. Please install ffmpeg to use voice input.\n' +
@@ -26,7 +66,7 @@ export class AudioCapture {
                 );
                 reject(new Error('ffmpeg not found'));
             });
-            
+
             testProcess.on('close', (code) => {
                 if (code === 0) {
                     resolve();
@@ -84,7 +124,7 @@ export class AudioCapture {
 
                 console.log('Starting ffmpeg with args:', ffmpegArgs.join(' '));
                 
-                this.ffmpegProcess = spawn('ffmpeg', ffmpegArgs);
+                this.ffmpegProcess = spawn(this.ffmpegPath, ffmpegArgs);
                 this.isRecording = true;
 
                 // Handle stdout - audio data
