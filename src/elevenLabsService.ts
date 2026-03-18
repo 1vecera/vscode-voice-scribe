@@ -67,6 +67,9 @@ export class ElevenLabsService {
                     model_id: 'scribe_v2_realtime',   // REQUIRED
                     audio_format: 'pcm_16000',        // 16 kHz 16-bit LE mono
                     commit_strategy: 'vad',           // auto-commit on silence
+                    tag_audio_events: 'false',        // don't insert (laughter) etc.
+                    num_speakers: '1',                // single speaker dictation
+                    no_verbatim: 'true',              // strip filler words & false starts
                     // ── VAD tuning (from sensitivity preset) ─────────
                     vad_silence_threshold_secs: '0.8', // commit faster (default 1.5)
                     vad_threshold: vad.threshold,
@@ -90,39 +93,9 @@ export class ElevenLabsService {
                 this.ws.on('open', () => {
                     this.isTranscribing = true;
                     log('WebSocket connected — waiting for session_started');
-
-                    // ── Custom vocabulary (Task 2 + Task 10 merge) ──────
-                    const userVocab = config.get<Array<{ word: string; boost?: number; phonemes?: string[] }>>('customVocabulary', []);
-                    const autoVocab = additionalVocabulary || [];
-
-                    // User entries take priority — deduplicate by word
-                    const seenWords = new Set<string>();
-                    const merged: Array<Record<string, unknown>> = [];
-
-                    for (const entry of userVocab) {
-                        seenWords.add(entry.word.toLowerCase());
-                        const item: Record<string, unknown> = { word: entry.word };
-                        if (entry.boost !== undefined) { item.boost = entry.boost; }
-                        if (entry.phonemes && entry.phonemes.length > 0) { item.phonemes = entry.phonemes; }
-                        merged.push(item);
-                    }
-
-                    for (const entry of autoVocab) {
-                        if (!seenWords.has(entry.word.toLowerCase())) {
-                            seenWords.add(entry.word.toLowerCase());
-                            merged.push({ word: entry.word, boost: entry.boost });
-                        }
-                    }
-
-                    if (merged.length > 0) {
-                        const vocabulary = merged.slice(0, 200);
-                        this.ws!.send(JSON.stringify({
-                            type: 'session_config',
-                            custom_vocabulary: { vocabulary },
-                        }));
-                        log(`Sent custom vocabulary: ${vocabulary.length} entries`);
-                    }
-
+                    // Note: custom vocabulary / keyterm boosting is only available
+                    // in the batch Scribe v2 API, not in the realtime WebSocket API.
+                    // The realtime protocol only accepts input_audio_chunk messages.
                     resolve();
                 });
 

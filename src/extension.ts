@@ -415,7 +415,7 @@ async function handleCommitted(text: string) {
                 editor.document.offsetAt(insertStart) + finalText.length
             );
             editor.selection = new vscode.Selection(insertStart, insertEnd);
-            await vscode.commands.executeCommand('editor.action.commentLine');
+            await vscode.commands.executeCommand('editor.action.addCommentLine');
         }
     }
 
