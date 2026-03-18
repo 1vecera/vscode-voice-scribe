@@ -53,6 +53,48 @@ function stopIdleTimer() {
     }
 }
 
+// ── Prose language set (for smart comment mode) ────────────────────────────
+const PROSE_LANGUAGES = new Set([
+    'markdown', 'plaintext', 'restructuredtext', 'latex',
+    'json', 'jsonc', 'yaml', 'xml', 'html',
+]);
+function isProseLanguage(languageId: string): boolean {
+    return PROSE_LANGUAGES.has(languageId);
+}
+
+// ── Filler word removal ────────────────────────────────────────────────────
+const FILLER_REGEX = /\b(um|uh|uh huh|hmm|mm|mhm)\b/gi;
+function removeFiller(text: string): string {
+    const config = vscode.workspace.getConfiguration('voiceScribe');
+    if (!config.get<boolean>('removeFiller', true)) { return text; }
+    return text.replace(FILLER_REGEX, '').replace(/\s{2,}/g, ' ').trim();
+}
+
+// ── Voice commands ─────────────────────────────────────────────────────────
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function getVoiceCommands(): Record<string, () => any> {
+    return {
+        'undo':           () => vscode.commands.executeCommand('undo'),
+        'undo that':      () => vscode.commands.executeCommand('undo'),
+        'redo':           () => vscode.commands.executeCommand('redo'),
+        'delete line':    () => vscode.commands.executeCommand('editor.action.deleteLines'),
+        'delete that':    () => vscode.commands.executeCommand('editor.action.deleteLines'),
+        'new line':       () => { const e = vscode.window.activeTextEditor; if (e) { e.edit(b => b.insert(e.selection.active, '\n')); } },
+        'select all':     () => vscode.commands.executeCommand('editor.action.selectAll'),
+        'save':           () => vscode.commands.executeCommand('workbench.action.files.save'),
+        'save file':      () => vscode.commands.executeCommand('workbench.action.files.save'),
+        'stop':           () => stopRecording(),
+        'stop recording': () => stopRecording(),
+    };
+}
+
+const PREFIX_COMMANDS: Record<string, string> = {
+    'todo': 'TODO',
+    'fix me': 'FIXME',
+    'note': 'NOTE',
+    'hack': 'HACK',
+};
+
 function clearLiveDecoration(editor: vscode.TextEditor | undefined) {
     editor?.setDecorations(liveDecorationType, []);
 }
@@ -66,7 +108,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Create status bar item
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    statusBarItem.command = 'voiceScribe.startRecording';
+    statusBarItem.command = 'voiceScribe.toggleRecording';
     context.subscriptions.push(statusBarItem);
     updateStatusBar();
 
@@ -74,14 +116,9 @@ export function activate(context: vscode.ExtensionContext) {
     initializeServices();
 
     // Register commands
-    const startRecordingCommand = vscode.commands.registerCommand(
-        'voiceScribe.startRecording',
-        () => startRecording()
-    );
-
-    const stopRecordingCommand = vscode.commands.registerCommand(
-        'voiceScribe.stopRecording',
-        () => stopRecording()
+    const toggleRecordingCommand = vscode.commands.registerCommand(
+        'voiceScribe.toggleRecording',
+        () => isRecording ? stopRecording() : startRecording()
     );
 
     const configureApiKeyCommand = vscode.commands.registerCommand(
@@ -94,16 +131,9 @@ export function activate(context: vscode.ExtensionContext) {
         () => selectLanguage()
     );
 
-    const toggleRecordingCommand = vscode.commands.registerCommand(
-        'voiceScribe.toggleRecording',
-        () => isRecording ? stopRecording() : startRecording()
-    );
-
-    context.subscriptions.push(startRecordingCommand);
-    context.subscriptions.push(stopRecordingCommand);
+    context.subscriptions.push(toggleRecordingCommand);
     context.subscriptions.push(configureApiKeyCommand);
     context.subscriptions.push(selectLanguageCommand);
-    context.subscriptions.push(toggleRecordingCommand);
 
     // Listen for configuration changes
     context.subscriptions.push(
@@ -163,6 +193,19 @@ async function startRecording() {
         editQueue = Promise.resolve();
         clearLiveDecoration(vscode.window.activeTextEditor);
 
+        // Auto-populate vocabulary from workspace (Task 10)
+        // Lazy-load to avoid requiring vscode in non-extension-host environments (tests)
+        let autoVocabulary: Array<{ word: string; boost: number }> | undefined;
+        const autoVocabConfig = vscode.workspace.getConfiguration('voiceScribe');
+        if (autoVocabConfig.get<boolean>('autoVocabulary', false)) {
+            try {
+                const { extractWorkspaceVocabulary } = await import('./vocabularyBuilder');
+                autoVocabulary = await extractWorkspaceVocabulary(100);
+            } catch (err) {
+                console.error('Failed to extract workspace vocabulary:', err);
+            }
+        }
+
         // Start ElevenLabs connection with two callbacks
         await elevenLabsService.startTranscription(
             // ── onPartial ───────────────────────────────────────────
@@ -179,7 +222,8 @@ async function startRecording() {
             (text: string) => {
                 resetIdleTimer();
                 enqueueEdit(() => handleCommitted(text));
-            }
+            },
+            autoVocabulary
         );
 
         // Start audio capture
@@ -249,6 +293,10 @@ async function handlePartial(text: string) {
     const editor = vscode.window.activeTextEditor;
     if (!editor) { return; }
 
+    // Apply filler removal (Task 3)
+    text = removeFiller(text);
+    if (!text) { return; }
+
     const ok = await editor.edit(editBuilder => {
         if (liveRange) {
             // Replace existing live zone with the updated hypothesis
@@ -277,6 +325,8 @@ async function handlePartial(text: string) {
  * Handle a committed_transcript.
  * This is the final, locked-in text for the current segment.
  * Replace live zone, clear decoration, add trailing space, reset for next segment.
+ *
+ * Flow: filler removal → voice commands → terminal target → editor insert → auto-comment
  */
 async function handleCommitted(text: string) {
     const editor = vscode.window.activeTextEditor;
@@ -285,7 +335,65 @@ async function handleCommitted(text: string) {
         return;
     }
 
-    const finalText = text + ' ';
+    const config = vscode.workspace.getConfiguration('voiceScribe');
+
+    // 1. Apply filler removal (Task 3)
+    let processedText = removeFiller(text);
+    if (!processedText) {
+        // Filler removal left nothing — clear live state and skip
+        clearLiveDecoration(editor);
+        liveStart = null;
+        liveRange = null;
+        return;
+    }
+
+    // 2. Check voice commands (Task 5) — may return early
+    if (config.get<boolean>('enableVoiceCommands', false)) {
+        const normalized = processedText.toLowerCase().trim();
+
+        // Exact match commands
+        const commands = getVoiceCommands();
+        if (commands[normalized]) {
+            await commands[normalized]();
+            liveStart = null;
+            liveRange = null;
+            clearLiveDecoration(editor);
+            return; // Don't insert text
+        }
+
+        // Prefix commands (todo X, fix me X, etc.)
+        for (const [prefix, tag] of Object.entries(PREFIX_COMMANDS)) {
+            if (normalized.startsWith(prefix + ' ')) {
+                const content = processedText.slice(prefix.length + 1).trim();
+                processedText = `${tag}: ${content}`;
+                break;
+            }
+        }
+    }
+
+    // 3. Check terminal target (Task 6) — may return early
+    const target = config.get<string>('target', 'editor');
+    if (target === 'terminal') {
+        await vscode.commands.executeCommand(
+            'workbench.action.terminal.sendSequence',
+            { text: processedText + '\n' }
+        );
+        // Clear live state (partial was in editor, but committed goes to terminal)
+        clearLiveDecoration(editor);
+        liveStart = null;
+        liveRange = null;
+        return;
+    }
+
+    // 4. Insert text into editor (existing logic)
+    const finalText = processedText + ' ';
+
+    // Track where the insertion starts for auto-comment
+    const insertStart = liveRange
+        ? liveRange.start
+        : editor.selection.isEmpty
+            ? editor.selection.active
+            : editor.selection.start;
 
     await editor.edit(editBuilder => {
         if (liveRange) {
@@ -297,7 +405,21 @@ async function handleCommitted(text: string) {
         }
     });
 
-    // Clear decorations and reset for next segment
+    // 5. Apply auto-comment (Task 1) — after editor insertion
+    const insertMode = config.get<string>('insertMode', 'plain');
+    if (insertMode === 'comment' || insertMode === 'smart') {
+        const shouldComment = insertMode === 'comment' || !isProseLanguage(editor.document.languageId);
+        if (shouldComment) {
+            // Select the inserted range, then toggle line comment
+            const insertEnd = editor.document.positionAt(
+                editor.document.offsetAt(insertStart) + finalText.length
+            );
+            editor.selection = new vscode.Selection(insertStart, insertEnd);
+            await vscode.commands.executeCommand('editor.action.commentLine');
+        }
+    }
+
+    // 6. Clear decorations and reset for next segment
     clearLiveDecoration(editor);
     liveStart = null;
     liveRange = null;

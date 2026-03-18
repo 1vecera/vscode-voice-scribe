@@ -25,7 +25,9 @@ export function createMockVscode() {
 
     const configValues = new Map<string, any>();
     const config: any = {
-        get: sinon.stub().callsFake((key: string) => configValues.get(key)),
+        get: sinon.stub().callsFake((key: string, defaultValue?: any) => {
+            return configValues.has(key) ? configValues.get(key) : defaultValue;
+        }),
         update: sinon.stub().resolves(),
         has: sinon.stub().callsFake((key: string) => configValues.has(key)),
         inspect: sinon.stub().returns(undefined),
@@ -73,6 +75,20 @@ export function createMockVscode() {
             constructor(start: any, end: any) {
                 this.start = start;
                 this.end = end;
+            }
+        },
+        Selection: class Selection {
+            anchor: any;
+            active: any;
+            start: any;
+            end: any;
+            isEmpty: boolean;
+            constructor(anchorOrStart: any, activeOrEnd: any) {
+                this.anchor = anchorOrStart;
+                this.active = activeOrEnd;
+                this.start = anchorOrStart;
+                this.end = activeOrEnd;
+                this.isEmpty = anchorOrStart === activeOrEnd;
             }
         },
         // Internal references for test assertions

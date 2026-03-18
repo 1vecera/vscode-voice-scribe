@@ -63,12 +63,13 @@ describe('ElevenLabsService', () => {
     function startService(
         onPartial?: sinon.SinonStub,
         onFinal?: sinon.SinonStub,
+        additionalVocabulary?: Array<{ word: string; boost: number }>,
     ) {
         const service = new ElevenLabsService('test-api-key');
         const p = onPartial || sinon.stub();
         const f = onFinal || sinon.stub();
 
-        const promise = service.startTranscription(p, f);
+        const promise = service.startTranscription(p, f, additionalVocabulary);
         const ws = wsInstances[wsInstances.length - 1];
         ws.emit('open');
 
@@ -127,6 +128,25 @@ describe('ElevenLabsService', () => {
             );
         });
 
+        it('should include VAD noise-rejection params in URL', async () => {
+            const { ws, promise } = startService();
+            await promise;
+
+            assert.ok(ws.url.includes('vad_threshold=0.5'),
+                'expected vad_threshold=0.5 in URL');
+            assert.ok(ws.url.includes('min_speech_duration_ms=250'),
+                'expected min_speech_duration_ms=250 in URL');
+            assert.ok(ws.url.includes('min_silence_duration_ms=100'),
+                'expected min_silence_duration_ms=100 in URL');
+        });
+
+        it('should not auto-open output panel on WebSocket connect', async () => {
+            const { promise } = startService();
+            await promise;
+
+            sinon.assert.notCalled(mockVscode._outputChannel.show);
+        });
+
         it('should use configured language code', async () => {
             mockVscode._configValues.set('language', 'ja');
             // Reload module with updated config
@@ -141,6 +161,174 @@ describe('ElevenLabsService', () => {
             await p;
 
             assert.ok(ws.url.includes('language_code=ja'));
+        });
+
+        it('should use low VAD preset when configured', async () => {
+            mockVscode._configValues.set('vadSensitivity', 'low');
+            const mod = proxyquire('../elevenLabsService', {
+                'vscode': mockVscode,
+                'ws': MockWebSocket,
+            });
+            const svc = new mod.ElevenLabsService('key');
+            const p = svc.startTranscription(sinon.stub(), sinon.stub());
+            const ws = wsInstances[wsInstances.length - 1];
+            ws.emit('open');
+            await p;
+
+            assert.ok(ws.url.includes('vad_threshold=0.7'),
+                'expected vad_threshold=0.7 for low sensitivity');
+            assert.ok(ws.url.includes('min_speech_duration_ms=400'),
+                'expected min_speech_duration_ms=400 for low sensitivity');
+            assert.ok(ws.url.includes('min_silence_duration_ms=200'),
+                'expected min_silence_duration_ms=200 for low sensitivity');
+        });
+
+        it('should use high VAD preset when configured', async () => {
+            mockVscode._configValues.set('vadSensitivity', 'high');
+            const mod = proxyquire('../elevenLabsService', {
+                'vscode': mockVscode,
+                'ws': MockWebSocket,
+            });
+            const svc = new mod.ElevenLabsService('key');
+            const p = svc.startTranscription(sinon.stub(), sinon.stub());
+            const ws = wsInstances[wsInstances.length - 1];
+            ws.emit('open');
+            await p;
+
+            assert.ok(ws.url.includes('vad_threshold=0.3'),
+                'expected vad_threshold=0.3 for high sensitivity');
+            assert.ok(ws.url.includes('min_speech_duration_ms=100'),
+                'expected min_speech_duration_ms=100 for high sensitivity');
+            assert.ok(ws.url.includes('min_silence_duration_ms=50'),
+                'expected min_silence_duration_ms=50 for high sensitivity');
+        });
+
+        it('should send custom vocabulary on connect when configured', async () => {
+            mockVscode._configValues.set('customVocabulary', [
+                { word: 'useState', boost: 5.0 },
+                { word: 'kubectl', boost: 3.0, phonemes: ['ku\u02D0b k\u028Cdl'] },
+            ]);
+            const mod = proxyquire('../elevenLabsService', {
+                'vscode': mockVscode,
+                'ws': MockWebSocket,
+            });
+            const svc = new mod.ElevenLabsService('key');
+            const p = svc.startTranscription(sinon.stub(), sinon.stub());
+            const ws = wsInstances[wsInstances.length - 1];
+            ws.emit('open');
+            await p;
+
+            assert.strictEqual(ws.sentMessages.length, 1,
+                'expected one session_config message');
+            const msg = JSON.parse(ws.sentMessages[0]);
+            assert.strictEqual(msg.type, 'session_config');
+            assert.strictEqual(msg.custom_vocabulary.vocabulary.length, 2);
+            assert.strictEqual(msg.custom_vocabulary.vocabulary[0].word, 'useState');
+            assert.strictEqual(msg.custom_vocabulary.vocabulary[0].boost, 5.0);
+            assert.strictEqual(msg.custom_vocabulary.vocabulary[1].word, 'kubectl');
+            assert.deepStrictEqual(msg.custom_vocabulary.vocabulary[1].phonemes, ['ku\u02D0b k\u028Cdl']);
+        });
+
+        it('should not send custom vocabulary when empty', async () => {
+            // customVocabulary not set — defaults to [] via config.get default
+            const { ws, promise } = startService();
+            await promise;
+
+            assert.strictEqual(ws.sentMessages.length, 0,
+                'expected no messages sent when custom vocabulary is empty');
+        });
+
+        it('should limit custom vocabulary to 200 entries', async () => {
+            const largeVocab = Array.from({ length: 250 }, (_, i) => ({
+                word: `word${i}`,
+                boost: 1.0,
+            }));
+            mockVscode._configValues.set('customVocabulary', largeVocab);
+            const mod = proxyquire('../elevenLabsService', {
+                'vscode': mockVscode,
+                'ws': MockWebSocket,
+            });
+            const svc = new mod.ElevenLabsService('key');
+            const p = svc.startTranscription(sinon.stub(), sinon.stub());
+            const ws = wsInstances[wsInstances.length - 1];
+            ws.emit('open');
+            await p;
+
+            assert.strictEqual(ws.sentMessages.length, 1);
+            const msg = JSON.parse(ws.sentMessages[0]);
+            assert.strictEqual(msg.custom_vocabulary.vocabulary.length, 200,
+                'expected vocabulary limited to 200 entries');
+        });
+
+        it('should merge additional vocabulary with user vocabulary', async () => {
+            mockVscode._configValues.set('customVocabulary', [
+                { word: 'useState', boost: 5.0 },
+            ]);
+            const mod = proxyquire('../elevenLabsService', {
+                'vscode': mockVscode,
+                'ws': MockWebSocket,
+            });
+            const svc = new mod.ElevenLabsService('key');
+            const p = svc.startTranscription(
+                sinon.stub(), sinon.stub(),
+                [{ word: 'myFunc', boost: 2.0 }],
+            );
+            const ws = wsInstances[wsInstances.length - 1];
+            ws.emit('open');
+            await p;
+
+            assert.strictEqual(ws.sentMessages.length, 1);
+            const msg = JSON.parse(ws.sentMessages[0]);
+            assert.strictEqual(msg.type, 'session_config');
+            assert.strictEqual(msg.custom_vocabulary.vocabulary.length, 2,
+                'expected 2 vocabulary entries (1 user + 1 additional)');
+            const words = msg.custom_vocabulary.vocabulary.map((v: any) => v.word);
+            assert.ok(words.includes('useState'), 'expected user vocab entry "useState"');
+            assert.ok(words.includes('myFunc'), 'expected additional vocab entry "myFunc"');
+        });
+
+        it('should deduplicate vocabulary by word (user takes priority)', async () => {
+            mockVscode._configValues.set('customVocabulary', [
+                { word: 'MyClass', boost: 5.0 },
+            ]);
+            const mod = proxyquire('../elevenLabsService', {
+                'vscode': mockVscode,
+                'ws': MockWebSocket,
+            });
+            const svc = new mod.ElevenLabsService('key');
+            const p = svc.startTranscription(
+                sinon.stub(), sinon.stub(),
+                [{ word: 'myclass', boost: 2.0 }],
+            );
+            const ws = wsInstances[wsInstances.length - 1];
+            ws.emit('open');
+            await p;
+
+            assert.strictEqual(ws.sentMessages.length, 1);
+            const msg = JSON.parse(ws.sentMessages[0]);
+            assert.strictEqual(msg.custom_vocabulary.vocabulary.length, 1,
+                'expected 1 entry after dedup (same word, different case)');
+            assert.strictEqual(msg.custom_vocabulary.vocabulary[0].word, 'MyClass',
+                'expected user entry to take priority');
+            assert.strictEqual(msg.custom_vocabulary.vocabulary[0].boost, 5.0,
+                'expected user boost value to be preserved');
+        });
+
+        it('should send only additional vocabulary when no user vocabulary', async () => {
+            // customVocabulary not set — defaults to [] via config.get default
+            const { ws, promise } = startService(
+                undefined, undefined,
+                [{ word: 'extractFunc', boost: 3.0 }],
+            );
+            await promise;
+
+            assert.strictEqual(ws.sentMessages.length, 1,
+                'expected one session_config message');
+            const msg = JSON.parse(ws.sentMessages[0]);
+            assert.strictEqual(msg.type, 'session_config');
+            assert.strictEqual(msg.custom_vocabulary.vocabulary.length, 1);
+            assert.strictEqual(msg.custom_vocabulary.vocabulary[0].word, 'extractFunc');
+            assert.strictEqual(msg.custom_vocabulary.vocabulary[0].boost, 3.0);
         });
     });
 

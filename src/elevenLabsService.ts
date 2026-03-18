@@ -38,7 +38,8 @@ export class ElevenLabsService {
      */
     async startTranscription(
         onPartial: (text: string) => void,
-        onFinal: (text: string) => void
+        onFinal: (text: string) => void,
+        additionalVocabulary?: Array<{ word: string; boost: number }>
     ): Promise<void> {
         if (this.isTranscribing) {
             throw new Error('Already transcribing');
@@ -53,15 +54,24 @@ export class ElevenLabsService {
                 const language = config.get<string>('language') || 'auto';
                 log(`Language: ${language}`);
 
+                // ── VAD sensitivity presets ────────────────────────
+                const vadSensitivity = config.get<string>('vadSensitivity', 'medium');
+                const vadPresets: Record<string, { threshold: string; minSpeech: string; minSilence: string }> = {
+                    low:    { threshold: '0.7', minSpeech: '400', minSilence: '200' },
+                    medium: { threshold: '0.5', minSpeech: '250', minSilence: '100' },
+                    high:   { threshold: '0.3', minSpeech: '100', minSilence: '50' },
+                };
+                const vad = vadPresets[vadSensitivity] || vadPresets['medium'];
+
                 const params = new URLSearchParams({
                     model_id: 'scribe_v2_realtime',   // REQUIRED
                     audio_format: 'pcm_16000',        // 16 kHz 16-bit LE mono
                     commit_strategy: 'vad',           // auto-commit on silence
-                    // ── Aggressive rewrite tuning ────────────────────
+                    // ── VAD tuning (from sensitivity preset) ─────────
                     vad_silence_threshold_secs: '0.8', // commit faster (default 1.5)
-                    vad_threshold: '0.5',              // reject non-speech noise
-                    min_speech_duration_ms: '250',     // reject short bursts (<200ms)
-                    min_silence_duration_ms: '100',    // reduce spurious micro-detections
+                    vad_threshold: vad.threshold,
+                    min_speech_duration_ms: vad.minSpeech,
+                    min_silence_duration_ms: vad.minSilence,
                 });
                 // Only set language_code when a specific language is chosen;
                 // omitting it lets the API auto-detect the spoken language.
@@ -80,8 +90,39 @@ export class ElevenLabsService {
                 this.ws.on('open', () => {
                     this.isTranscribing = true;
                     log('WebSocket connected — waiting for session_started');
-                    // No config message needed: params are in the URL.
-                    // session_started arrives automatically.
+
+                    // ── Custom vocabulary (Task 2 + Task 10 merge) ──────
+                    const userVocab = config.get<Array<{ word: string; boost?: number; phonemes?: string[] }>>('customVocabulary', []);
+                    const autoVocab = additionalVocabulary || [];
+
+                    // User entries take priority — deduplicate by word
+                    const seenWords = new Set<string>();
+                    const merged: Array<Record<string, unknown>> = [];
+
+                    for (const entry of userVocab) {
+                        seenWords.add(entry.word.toLowerCase());
+                        const item: Record<string, unknown> = { word: entry.word };
+                        if (entry.boost !== undefined) { item.boost = entry.boost; }
+                        if (entry.phonemes && entry.phonemes.length > 0) { item.phonemes = entry.phonemes; }
+                        merged.push(item);
+                    }
+
+                    for (const entry of autoVocab) {
+                        if (!seenWords.has(entry.word.toLowerCase())) {
+                            seenWords.add(entry.word.toLowerCase());
+                            merged.push({ word: entry.word, boost: entry.boost });
+                        }
+                    }
+
+                    if (merged.length > 0) {
+                        const vocabulary = merged.slice(0, 200);
+                        this.ws!.send(JSON.stringify({
+                            type: 'session_config',
+                            custom_vocabulary: { vocabulary },
+                        }));
+                        log(`Sent custom vocabulary: ${vocabulary.length} entries`);
+                    }
+
                     resolve();
                 });
 

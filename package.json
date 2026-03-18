@@ -2,7 +2,7 @@
   "name": "voice-scribe",
   "displayName": "Voice Scribe",
   "description": "High-quality real-time voice-to-text for VS Code with live rewriting",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "publisher": "1vecera",
   "icon": "images/icon.png",
   "engines": {
@@ -21,7 +21,6 @@
     "scribe"
   ],
   "activationEvents": [
-    "onCommand:voiceScribe.startRecording",
     "onCommand:voiceScribe.toggleRecording",
     "onCommand:voiceScribe.configureApiKey",
     "onCommand:voiceScribe.selectLanguage"
@@ -29,14 +28,6 @@
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
-      {
-        "command": "voiceScribe.startRecording",
-        "title": "Voice Scribe: Start Recording"
-      },
-      {
-        "command": "voiceScribe.stopRecording",
-        "title": "Voice Scribe: Stop Recording"
-      },
       {
         "command": "voiceScribe.configureApiKey",
         "title": "Voice Scribe: Configure API Key"
@@ -136,6 +127,107 @@
             "Filipino"
           ],
           "description": "Language you are speaking in for transcription (ISO 639-1 code). Set to 'auto' to let the API detect your language automatically."
+        },
+        "voiceScribe.insertMode": {
+          "type": "string",
+          "default": "plain",
+          "enum": [
+            "plain",
+            "comment",
+            "smart"
+          ],
+          "enumDescriptions": [
+            "Insert transcribed text as-is",
+            "Always wrap committed text in a line comment",
+            "Auto-comment in code files, plain text in prose files (markdown, plaintext, etc.)"
+          ],
+          "description": "How committed transcriptions are inserted into the editor."
+        },
+        "voiceScribe.removeFiller": {
+          "type": "boolean",
+          "default": true,
+          "description": "Remove filler words (um, uh, like, you know, etc.) from transcriptions."
+        },
+        "voiceScribe.enableVoiceCommands": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable voice commands (undo, redo, delete line, save, stop, etc.). When enabled, spoken commands are executed instead of inserted as text."
+        },
+        "voiceScribe.target": {
+          "type": "string",
+          "default": "editor",
+          "enum": [
+            "editor",
+            "terminal"
+          ],
+          "enumDescriptions": [
+            "Insert committed text into the active text editor (default)",
+            "Send committed text to the integrated terminal"
+          ],
+          "description": "Where committed transcriptions are sent."
+        },
+        "voiceScribe.vadSensitivity": {
+          "type": "string",
+          "default": "medium",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "enumDescriptions": [
+            "Noisy environment (open office, cafe). Rejects more non-speech.",
+            "Normal room (default)",
+            "Quiet room or headset. More sensitive to speech."
+          ],
+          "description": "Voice Activity Detection sensitivity preset. Controls how aggressively non-speech audio is rejected."
+        },
+        "voiceScribe.customVocabulary": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "properties": {
+              "word": {
+                "type": "string",
+                "description": "The word or phrase to boost recognition for"
+              },
+              "boost": {
+                "type": "number",
+                "description": "Boost factor (1.0-10.0). Higher values increase recognition likelihood."
+              },
+              "phonemes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Optional phoneme hints for pronunciation"
+              }
+            },
+            "required": [
+              "word"
+            ]
+          },
+          "description": "Custom vocabulary for improved recognition of domain-specific terms. Max 200 entries. Each entry requires a 'word' and optionally 'boost' (1.0-10.0) and 'phonemes'."
+        },
+        "voiceScribe.noiseReduction": {
+          "type": "string",
+          "default": "basic",
+          "enum": [
+            "off",
+            "basic",
+            "neural"
+          ],
+          "enumDescriptions": [
+            "No audio filters — raw microphone input sent directly",
+            "Basic filters: highpass, lowpass, and FFT-based denoising (default)",
+            "Enhanced: basic filters plus RNNoise neural noise suppression (downloads a small model on first use)"
+          ],
+          "description": "Audio noise reduction level applied before sending audio to the speech recognition API."
+        },
+        "voiceScribe.autoVocabulary": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically extract identifiers from open files and boost them in the speech recognition vocabulary."
         }
       }
     },

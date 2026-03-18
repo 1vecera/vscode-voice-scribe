@@ -16,8 +16,11 @@ describe('AudioCapture', () => {
         mockSpawn = sinon.stub();
         const mod = proxyquire('../audioCapture', {
             'vscode': mockVscode,
-            'child_process': { spawn: mockSpawn },
-            'fs': { existsSync: () => false },
+            'child_process': { spawn: mockSpawn, execSync: () => '' },
+            'fs': { existsSync: () => false, mkdirSync: sinon.stub(), createWriteStream: sinon.stub() },
+            'os': { homedir: () => '/mock/home' },
+            'path': { join: (...args: string[]) => args.join('/') },
+            'https': { get: sinon.stub() },
         });
         AudioCaptureClass = mod.AudioCapture;
     });
@@ -96,6 +99,29 @@ describe('AudioCapture', () => {
             assert.ok(args.includes('-f'),    'expected -f flag');
             assert.ok(args.includes('s16le'), 'expected PCM s16le format');
             assert.ok(args.includes('pipe:1'),'expected stdout pipe');
+        });
+
+        it('should include audio filter for non-speech noise rejection', async () => {
+            const initProc = createMockChildProcess();
+            const recordProc = createMockChildProcess();
+            mockSpawn.onFirstCall().returns(initProc);
+            mockSpawn.onSecondCall().returns(recordProc);
+
+            const ac = new AudioCaptureClass();
+            const initPromise = ac.initialize(sinon.stub());
+            initProc.emit('close', 0);
+            await initPromise;
+
+            await ac.startRecording();
+
+            const args: string[] = mockSpawn.secondCall.args[1];
+            const afIndex = args.indexOf('-af');
+            assert.ok(afIndex !== -1, 'expected -af flag in ffmpeg args');
+            assert.strictEqual(
+                args[afIndex + 1],
+                'highpass=f=200,lowpass=f=3000,afftdn=nr=15:nf=-30',
+                'expected highpass/lowpass/denoise filter chain',
+            );
         });
 
         it(`should use platform-specific input format (${process.platform})`, async () => {
@@ -191,6 +217,83 @@ describe('AudioCapture', () => {
             recordProc.emit('close', 0);
             assert.strictEqual(chunks.length, 1);
             assert.strictEqual(chunks[0].length, 1500);
+        });
+
+        it('should omit -af flag when noiseReduction is off', async () => {
+            mockVscode._configValues.set('noiseReduction', 'off');
+
+            const initProc = createMockChildProcess();
+            const recordProc = createMockChildProcess();
+            mockSpawn.onFirstCall().returns(initProc);
+            mockSpawn.onSecondCall().returns(recordProc);
+
+            const ac = new AudioCaptureClass();
+            const initPromise = ac.initialize(sinon.stub());
+            initProc.emit('close', 0);
+            await initPromise;
+
+            await ac.startRecording();
+
+            const args: string[] = mockSpawn.secondCall.args[1];
+            assert.strictEqual(args.indexOf('-af'), -1,
+                'expected no -af flag when noiseReduction is off');
+        });
+
+        it('should use basic filter when noiseReduction is basic', async () => {
+            mockVscode._configValues.set('noiseReduction', 'basic');
+
+            const initProc = createMockChildProcess();
+            const recordProc = createMockChildProcess();
+            mockSpawn.onFirstCall().returns(initProc);
+            mockSpawn.onSecondCall().returns(recordProc);
+
+            const ac = new AudioCaptureClass();
+            const initPromise = ac.initialize(sinon.stub());
+            initProc.emit('close', 0);
+            await initPromise;
+
+            await ac.startRecording();
+
+            const args: string[] = mockSpawn.secondCall.args[1];
+            const afIndex = args.indexOf('-af');
+            assert.ok(afIndex !== -1, 'expected -af flag for basic noise reduction');
+            assert.strictEqual(
+                args[afIndex + 1],
+                'highpass=f=200,lowpass=f=3000,afftdn=nr=15:nf=-30',
+                'expected basic filter chain',
+            );
+        });
+
+        it('should fall back to basic filter when neural model is not available', async () => {
+            mockVscode._configValues.set('noiseReduction', 'neural');
+
+            const initProc = createMockChildProcess();
+            const recordProc = createMockChildProcess();
+            mockSpawn.onFirstCall().returns(initProc);
+            mockSpawn.onSecondCall().returns(recordProc);
+
+            const ac = new AudioCaptureClass();
+            const initPromise = ac.initialize(sinon.stub());
+            initProc.emit('close', 0);
+            await initPromise;
+
+            // Stub ensureRnnoiseModel to resolve to null (model not found)
+            sinon.stub(ac, 'ensureRnnoiseModel').resolves(null);
+
+            await ac.startRecording();
+
+            const args: string[] = mockSpawn.secondCall.args[1];
+            const afIndex = args.indexOf('-af');
+            assert.ok(afIndex !== -1, 'expected -af flag for neural fallback');
+            assert.strictEqual(
+                args[afIndex + 1],
+                'highpass=f=200,lowpass=f=3000,afftdn=nr=15:nf=-30',
+                'expected fallback to basic filter chain when neural model unavailable',
+            );
+            sinon.assert.calledOnce(mockVscode.window.showWarningMessage);
+            const warnMsg = mockVscode.window.showWarningMessage.firstCall.args[0];
+            assert.ok(warnMsg.includes('RNNoise model not available'),
+                `expected warning about RNNoise model, got: ${warnMsg}`);
         });
     });
 
