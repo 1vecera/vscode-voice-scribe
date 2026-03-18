@@ -130,7 +130,7 @@
         },
         "voiceScribe.insertMode": {
           "type": "string",
-          "default": "plain",
+          "default": "smart",
           "enum": [
             "plain",
             "comment",
@@ -150,7 +150,7 @@
         },
         "voiceScribe.enableVoiceCommands": {
           "type": "boolean",
-          "default": false,
+          "default": true,
           "description": "Enable voice commands (undo, redo, delete line, save, stop, etc.). When enabled, spoken commands are executed instead of inserted as text."
         },
         "voiceScribe.target": {
@@ -211,7 +211,7 @@
         },
         "voiceScribe.noiseReduction": {
           "type": "string",
-          "default": "basic",
+          "default": "neural",
           "enum": [
             "off",
             "basic",
@@ -226,7 +226,7 @@
         },
         "voiceScribe.autoVocabulary": {
           "type": "boolean",
-          "default": false,
+          "default": true,
           "description": "Automatically extract identifiers from open files and boost them in the speech recognition vocabulary."
         }
       }
