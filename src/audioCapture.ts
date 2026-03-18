@@ -69,7 +69,7 @@ export class AudioCapture {
             fs.mkdirSync(MODELS_DIR, { recursive: true });
 
             return await new Promise<string | null>((resolve) => {
-                const url = 'https://github.com/nickcernis/rnnoise-models/raw/refs/heads/master/sh.rnnn';
+                const url = 'https://github.com/richardpl/arnndn-models/raw/refs/heads/master/sh.rnnn';
                 const followRedirect = (requestUrl: string, redirectCount: number) => {
                     if (redirectCount > 5) {
                         console.error('RNNoise model download: too many redirects');
