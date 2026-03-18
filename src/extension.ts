@@ -15,6 +15,11 @@ let liveStart: vscode.Position | null = null;   // anchor: where partial text be
 let liveRange: vscode.Range | null = null;       // current extent of partial text
 let editQueue: Promise<void> = Promise.resolve(); // serialises editor mutations
 
+// ── Idle auto-stop state ────────────────────────────────────────────────────
+const IDLE_TIMEOUT_MS = 120_000;  // 2 minutes
+let lastTranscriptTime = 0;
+let idleTimer: ReturnType<typeof setInterval> | null = null;
+
 // Decoration: subtle underline for "live / unconfirmed" text
 // (user prefers minimal visual noise)
 const liveDecorationType = vscode.window.createTextEditorDecorationType({
@@ -24,6 +29,28 @@ const liveDecorationType = vscode.window.createTextEditorDecorationType({
 /** Enqueue an editor mutation so they never overlap. */
 function enqueueEdit(fn: () => Promise<void>) {
     editQueue = editQueue.then(fn, fn);      // run even if prev rejected
+}
+
+function resetIdleTimer() {
+    lastTranscriptTime = Date.now();
+}
+
+function startIdleTimer() {
+    lastTranscriptTime = Date.now();
+    idleTimer = setInterval(() => {
+        if (Date.now() - lastTranscriptTime >= IDLE_TIMEOUT_MS) {
+            stopIdleTimer();
+            vscode.window.showInformationMessage('Voice Scribe: auto-stopped after 2 minutes of silence.');
+            stopRecording();
+        }
+    }, 10_000);
+}
+
+function stopIdleTimer() {
+    if (idleTimer) {
+        clearInterval(idleTimer);
+        idleTimer = null;
+    }
 }
 
 function clearLiveDecoration(editor: vscode.TextEditor | undefined) {
@@ -67,10 +94,16 @@ export function activate(context: vscode.ExtensionContext) {
         () => selectLanguage()
     );
 
+    const toggleRecordingCommand = vscode.commands.registerCommand(
+        'voiceScribe.toggleRecording',
+        () => isRecording ? stopRecording() : startRecording()
+    );
+
     context.subscriptions.push(startRecordingCommand);
     context.subscriptions.push(stopRecordingCommand);
     context.subscriptions.push(configureApiKeyCommand);
     context.subscriptions.push(selectLanguageCommand);
+    context.subscriptions.push(toggleRecordingCommand);
 
     // Listen for configuration changes
     context.subscriptions.push(
@@ -137,12 +170,14 @@ async function startRecording() {
             // The model rewrites earlier words as context grows.
             // We replace the entire live zone each time.
             (text: string) => {
+                resetIdleTimer();
                 enqueueEdit(() => handlePartial(text));
             },
             // ── onFinal ─────────────────────────────────────────────
             // committed_transcript = locked in. Replace live zone one
             // last time, remove decoration, advance cursor.
             (text: string) => {
+                resetIdleTimer();
                 enqueueEdit(() => handleCommitted(text));
             }
         );
@@ -151,6 +186,7 @@ async function startRecording() {
         await audioCapture.startRecording();
 
         isRecording = true;
+        startIdleTimer();
         updateStatusBar();
 
         // Set context for keybinding
@@ -158,6 +194,7 @@ async function startRecording() {
 
     } catch (error) {
         isRecording = false;
+        stopIdleTimer();
         updateStatusBar();
         await vscode.commands.executeCommand('setContext', 'voiceScribe.recording', false);
         vscode.window.showErrorMessage(`Failed to start recording: ${error}`);
@@ -170,6 +207,8 @@ async function stopRecording() {
     }
 
     try {
+        stopIdleTimer();
+
         // Stop audio capture first (stops sending chunks)
         await audioCapture.stopRecording();
 
@@ -192,6 +231,7 @@ async function stopRecording() {
         // the same callback pipeline.
     } catch (error) {
         isRecording = false;
+        stopIdleTimer();
         updateStatusBar();
         await vscode.commands.executeCommand('setContext', 'voiceScribe.recording', false);
         vscode.window.showErrorMessage(`Failed to stop recording: ${error}`);
@@ -337,19 +377,21 @@ async function configureApiKey() {
 }
 
 function updateStatusBar() {
+    statusBarItem.command = 'voiceScribe.toggleRecording';
     if (isRecording) {
         statusBarItem.text = '$(mic) Recording...';
+        statusBarItem.tooltip = 'Click to stop recording';
         statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
-        statusBarItem.command = 'voiceScribe.stopRecording';
     } else {
         statusBarItem.text = '$(mic) Voice Scribe';
+        statusBarItem.tooltip = 'Click to start recording';
         statusBarItem.backgroundColor = undefined;
-        statusBarItem.command = 'voiceScribe.startRecording';
     }
     statusBarItem.show();
 }
 
 export function deactivate() {
+    stopIdleTimer();
     if (elevenLabsService) {
         elevenLabsService.dispose();
     }

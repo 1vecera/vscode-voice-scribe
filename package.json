@@ -22,6 +22,7 @@
   ],
   "activationEvents": [
     "onCommand:voiceScribe.startRecording",
+    "onCommand:voiceScribe.toggleRecording",
     "onCommand:voiceScribe.configureApiKey",
     "onCommand:voiceScribe.selectLanguage"
   ],
@@ -43,6 +44,10 @@
       {
         "command": "voiceScribe.selectLanguage",
         "title": "Voice Scribe: Select Language"
+      },
+      {
+        "command": "voiceScribe.toggleRecording",
+        "title": "Voice Scribe: Toggle Recording"
       }
     ],
     "configuration": {
@@ -136,16 +141,10 @@
     },
     "keybindings": [
       {
-        "command": "voiceScribe.startRecording",
+        "command": "voiceScribe.toggleRecording",
         "key": "ctrl+alt+v",
         "mac": "cmd+alt+v",
         "when": "editorTextFocus"
-      },
-      {
-        "command": "voiceScribe.stopRecording",
-        "key": "ctrl+alt+v",
-        "mac": "cmd+alt+v",
-        "when": "voiceScribe.recording"
       }
     ]
   },

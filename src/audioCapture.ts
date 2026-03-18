@@ -95,6 +95,7 @@ export class AudioCapture {
                         '-i', ':default',
                         '-ac', '1',           // Mono
                         '-ar', '16000',       // 16kHz sample rate
+                        '-af', 'highpass=f=80,lowpass=f=3000',
                         '-f', 's16le',        // Raw PCM 16-bit little-endian
                         'pipe:1'              // Output to stdout
                     ];
@@ -105,6 +106,7 @@ export class AudioCapture {
                         '-i', 'default',
                         '-ac', '1',
                         '-ar', '16000',
+                        '-af', 'highpass=f=80,lowpass=f=3000',
                         '-f', 's16le',
                         'pipe:1'
                     ];
@@ -115,6 +117,7 @@ export class AudioCapture {
                         '-i', 'audio=default',
                         '-ac', '1',
                         '-ar', '16000',
+                        '-af', 'highpass=f=80,lowpass=f=3000',
                         '-f', 's16le',
                         'pipe:1'
                     ];

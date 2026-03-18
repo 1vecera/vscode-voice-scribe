@@ -59,9 +59,9 @@ export class ElevenLabsService {
                     commit_strategy: 'vad',           // auto-commit on silence
                     // ── Aggressive rewrite tuning ────────────────────
                     vad_silence_threshold_secs: '0.8', // commit faster (default 1.5)
-                    vad_threshold: '0.35',             // more sensitive VAD
-                    min_speech_duration_ms: '50',      // catch short words
-                    min_silence_duration_ms: '50',     // react faster to pauses
+                    vad_threshold: '0.5',              // reject non-speech noise
+                    min_speech_duration_ms: '250',     // reject short bursts (<200ms)
+                    min_silence_duration_ms: '100',    // reduce spurious micro-detections
                 });
                 // Only set language_code when a specific language is chosen;
                 // omitting it lets the API auto-detect the spoken language.
@@ -82,7 +82,6 @@ export class ElevenLabsService {
                     log('WebSocket connected — waiting for session_started');
                     // No config message needed: params are in the URL.
                     // session_started arrives automatically.
-                    showLog();
                     resolve();
                 });
 

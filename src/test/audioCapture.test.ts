@@ -17,6 +17,7 @@ describe('AudioCapture', () => {
         const mod = proxyquire('../audioCapture', {
             'vscode': mockVscode,
             'child_process': { spawn: mockSpawn },
+            'fs': { existsSync: () => false },
         });
         AudioCaptureClass = mod.AudioCapture;
     });

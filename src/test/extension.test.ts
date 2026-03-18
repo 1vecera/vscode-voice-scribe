@@ -64,9 +64,9 @@ describe('Extension', () => {
     // ── activate ───────────────────────────────────────────────────────
 
     describe('activate', () => {
-        it('should register 3 commands', () => {
+        it('should register 5 commands', () => {
             ext.activate(mockContext);
-            assert.strictEqual(mockVscode.commands.registerCommand.callCount, 3);
+            assert.strictEqual(mockVscode.commands.registerCommand.callCount, 5);
         });
 
         it('should register voiceScribe.startRecording command', () => {
@@ -82,6 +82,16 @@ describe('Extension', () => {
         it('should register voiceScribe.configureApiKey command', () => {
             ext.activate(mockContext);
             assert.ok('voiceScribe.configureApiKey' in registeredCommands);
+        });
+
+        it('should register voiceScribe.selectLanguage command', () => {
+            ext.activate(mockContext);
+            assert.ok('voiceScribe.selectLanguage' in registeredCommands);
+        });
+
+        it('should register voiceScribe.toggleRecording command', () => {
+            ext.activate(mockContext);
+            assert.ok('voiceScribe.toggleRecording' in registeredCommands);
         });
 
         it('should create status bar item (right-aligned, priority 100)', () => {
@@ -103,16 +113,16 @@ describe('Extension', () => {
             );
             assert.strictEqual(
                 mockVscode._statusBarItem.command,
-                'voiceScribe.startRecording',
+                'voiceScribe.toggleRecording',
             );
         });
 
         it('should push disposables to context.subscriptions', () => {
             ext.activate(mockContext);
-            // statusBarItem + 3 commands + onDidChangeConfiguration = 5
+            // statusBarItem + 5 commands + onDidChangeConfiguration = 7
             assert.ok(
-                mockContext.subscriptions.length >= 5,
-                `Expected >= 5 subscriptions, got ${mockContext.subscriptions.length}`,
+                mockContext.subscriptions.length >= 7,
+                `Expected >= 7 subscriptions, got ${mockContext.subscriptions.length}`,
             );
         });
 
@@ -221,7 +231,7 @@ describe('Extension', () => {
             );
             assert.strictEqual(
                 mockVscode._statusBarItem.command,
-                'voiceScribe.stopRecording',
+                'voiceScribe.toggleRecording',
             );
         });
 
