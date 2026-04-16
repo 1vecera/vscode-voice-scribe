@@ -23,7 +23,8 @@
   "activationEvents": [
     "onCommand:voiceScribe.toggleRecording",
     "onCommand:voiceScribe.configureApiKey",
-    "onCommand:voiceScribe.selectLanguage"
+    "onCommand:voiceScribe.selectLanguage",
+    "onCommand:voiceScribe.polishLast"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -39,6 +40,10 @@
       {
         "command": "voiceScribe.toggleRecording",
         "title": "Voice Scribe: Toggle Recording"
+      },
+      {
+        "command": "voiceScribe.polishLast",
+        "title": "Voice Scribe: Polish Last Paragraph with Claude Code"
       }
     ],
     "configuration": {
@@ -228,6 +233,31 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically extract identifiers from open files and boost them in the speech recognition vocabulary."
+        },
+        "voiceScribe.polishModel": {
+          "type": "string",
+          "default": "haiku",
+          "enum": [
+            "haiku",
+            "sonnet",
+            "opus"
+          ],
+          "enumDescriptions": [
+            "Haiku — fastest, cheapest, great for paragraph polish (default)",
+            "Sonnet — balanced quality/speed, better with complex technical prose",
+            "Opus — highest quality, slower"
+          ],
+          "description": "Claude Code model used by the polish feature. Invoked via `claude -p --model <alias>`."
+        },
+        "voiceScribe.polishTimeoutMs": {
+          "type": "number",
+          "default": 30000,
+          "description": "Maximum time (milliseconds) to wait for Claude Code to return a polished paragraph before aborting."
+        },
+        "voiceScribe.polishOnPauseMs": {
+          "type": "number",
+          "default": 0,
+          "description": "If greater than 0, automatically polish the last paragraph after this many milliseconds of silence during recording. Set to 0 to disable (default). Recommended: 4000-8000."
         }
       }
     },
@@ -236,6 +266,12 @@
         "command": "voiceScribe.toggleRecording",
         "key": "ctrl+alt+v",
         "mac": "cmd+alt+v",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "voiceScribe.polishLast",
+        "key": "ctrl+alt+p",
+        "mac": "cmd+alt+p",
         "when": "editorTextFocus"
       }
     ]

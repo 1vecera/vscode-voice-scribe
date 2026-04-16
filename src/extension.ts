@@ -1,11 +1,23 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { ElevenLabsService } from './elevenLabsService';
 import { AudioCapture } from './audioCapture';
+import { ClaudePolishService } from './claudePolish';
 
 let elevenLabsService: ElevenLabsService | null = null;
 let audioCapture: AudioCapture | null = null;
+let claudePolish: ClaudePolishService | null = null;
 let isRecording = false;
 let statusBarItem: vscode.StatusBarItem;
+
+// ── Paragraph tracking for polish ───────────────────────────────────────────
+// Tracks the span of text accumulated from successive committed transcripts.
+// Reset on: recording stop, explicit polish, user moves caret out of range,
+// or manual command. Used to know WHICH span to send to `claude -p`.
+let paragraphStart: vscode.Position | null = null;
+let paragraphEnd: vscode.Position | null = null;
+let paragraphDocUri: vscode.Uri | null = null;
+let isPolishing = false;
 
 // ── Live-rewrite state ──────────────────────────────────────────────────────
 // Tracks the "live zone" — the range of text currently being rewritten by
@@ -37,13 +49,28 @@ function resetIdleTimer() {
 
 function startIdleTimer() {
     lastTranscriptTime = Date.now();
+    let pausePolishFired = false;
     idleTimer = setInterval(() => {
-        if (Date.now() - lastTranscriptTime >= IDLE_TIMEOUT_MS) {
+        const idleMs = Date.now() - lastTranscriptTime;
+        const config = vscode.workspace.getConfiguration('voiceScribe');
+
+        // Auto-polish after a configurable pause (opt-in, 0 = off)
+        const pausePolishMs = config.get<number>('polishOnPauseMs', 0);
+        if (pausePolishMs > 0 && !pausePolishFired && !isPolishing &&
+            idleMs >= pausePolishMs && paragraphStart && paragraphEnd) {
+            pausePolishFired = true;
+            polishLast().catch(err => console.error('Voice Scribe pause-polish:', err));
+        }
+
+        // Reset the pause-polish flag when user starts speaking again
+        if (idleMs < 2000) { pausePolishFired = false; }
+
+        if (idleMs >= IDLE_TIMEOUT_MS) {
             stopIdleTimer();
             vscode.window.showInformationMessage('Voice Scribe: auto-stopped after 2 minutes of silence.');
             stopRecording();
         }
-    }, 10_000);
+    }, 1_000);
 }
 
 function stopIdleTimer() {
@@ -95,6 +122,21 @@ const PREFIX_COMMANDS: Record<string, string> = {
     'hack': 'HACK',
 };
 
+// ── Polish voice triggers ───────────────────────────────────────────────────
+// Normalized phrases (lowercase, trailing punctuation stripped) that invoke
+// Claude Code to rewrite the last paragraph. Czech + English.
+const POLISH_TRIGGERS = new Set([
+    'polish that', 'polish this', 'polish it',
+    'rewrite that', 'rewrite this', 'rewrite it',
+    'clean that up', 'clean this up', 'clean it up', 'clean up',
+    'fix that', 'fix this',
+    'uhlaď to', 'přepiš to', 'vyčisti to',
+]);
+
+function normalizeForCommand(text: string): string {
+    return text.toLowerCase().replace(/[.,!?;:]+$/g, '').trim();
+}
+
 function clearLiveDecoration(editor: vscode.TextEditor | undefined) {
     editor?.setDecorations(liveDecorationType, []);
 }
@@ -131,9 +173,39 @@ export function activate(context: vscode.ExtensionContext) {
         () => selectLanguage()
     );
 
+    const polishLastCommand = vscode.commands.registerCommand(
+        'voiceScribe.polishLast',
+        () => polishLast()
+    );
+
     context.subscriptions.push(toggleRecordingCommand);
     context.subscriptions.push(configureApiKeyCommand);
     context.subscriptions.push(selectLanguageCommand);
+    context.subscriptions.push(polishLastCommand);
+
+    // Invalidate the tracked paragraph when the user clicks/arrows away from it —
+    // otherwise "polish that" could rewrite an unintended span.
+    context.subscriptions.push(
+        vscode.window.onDidChangeTextEditorSelection(e => {
+            if (!paragraphStart || !paragraphEnd || !paragraphDocUri) { return; }
+            if (e.textEditor.document.uri.toString() !== paragraphDocUri.toString()) {
+                paragraphStart = null;
+                paragraphEnd = null;
+                paragraphDocUri = null;
+                return;
+            }
+            // Only invalidate on user-initiated moves (keyboard/mouse), not our own edits
+            if (e.kind === vscode.TextEditorSelectionChangeKind.Command) { return; }
+            const sel = e.selections[0];
+            const range = new vscode.Range(paragraphStart, paragraphEnd);
+            const outside = sel.active.isBefore(range.start) || sel.active.isAfter(range.end);
+            if (outside && !isRecording) {
+                paragraphStart = null;
+                paragraphEnd = null;
+                paragraphDocUri = null;
+            }
+        })
+    );
 
     // Listen for configuration changes
     context.subscriptions.push(
@@ -266,6 +338,10 @@ async function stopRecording() {
         liveStart = null;
         liveRange = null;
 
+        // Preserve paragraph span across stop/start so users can say "stop" then
+        // trigger the keybind polish after the fact — but only for a short window.
+        // For now we keep the span; it'll be invalidated on cursor move.
+
         // Clear context for keybinding
         await vscode.commands.executeCommand('setContext', 'voiceScribe.recording', false);
 
@@ -349,7 +425,18 @@ async function handleCommitted(text: string) {
 
     // 2. Check voice commands (Task 5) — may return early
     if (config.get<boolean>('enableVoiceCommands', false)) {
-        const normalized = processedText.toLowerCase().trim();
+        const normalized = normalizeForCommand(processedText);
+
+        // Polish triggers — invoke Claude Code on the last paragraph
+        if (POLISH_TRIGGERS.has(normalized)) {
+            liveStart = null;
+            liveRange = null;
+            clearLiveDecoration(editor);
+            polishLast().catch(err => {
+                vscode.window.showErrorMessage(`Voice Scribe: polish failed — ${err.message}`);
+            });
+            return;
+        }
 
         // Exact match commands
         const commands = getVoiceCommands();
@@ -419,10 +506,115 @@ async function handleCommitted(text: string) {
         }
     }
 
-    // 6. Clear decorations and reset for next segment
+    // 6. Track paragraph range for polish (Claude Code integration)
+    //    Extend the paragraph on each commit; reset happens elsewhere
+    //    (polishLast, stopRecording, or cursor moved outside the span).
+    const paragraphInsertEnd = editor.document.positionAt(
+        editor.document.offsetAt(insertStart) + finalText.length
+    );
+    if (!paragraphStart || paragraphDocUri?.toString() !== editor.document.uri.toString()) {
+        paragraphStart = insertStart;
+        paragraphDocUri = editor.document.uri;
+    }
+    paragraphEnd = paragraphInsertEnd;
+
+    // 7. Clear decorations and reset for next segment
     clearLiveDecoration(editor);
     liveStart = null;
     liveRange = null;
+}
+
+// ── Paragraph polish via `claude -p` ────────────────────────────────────────
+
+async function polishLast(): Promise<void> {
+    if (isPolishing) {
+        vscode.window.showInformationMessage('Voice Scribe: polish already in progress');
+        return;
+    }
+    if (!paragraphStart || !paragraphEnd || !paragraphDocUri) {
+        vscode.window.showInformationMessage('Voice Scribe: nothing to polish yet');
+        return;
+    }
+    if (!claudePolish) {
+        claudePolish = new ClaudePolishService();
+    }
+
+    // Re-acquire the editor for the tracked document
+    const doc = vscode.workspace.textDocuments.find(
+        d => d.uri.toString() === paragraphDocUri!.toString()
+    );
+    const editor = vscode.window.visibleTextEditors.find(e => e.document === doc)
+        ?? vscode.window.activeTextEditor;
+    if (!editor || editor.document.uri.toString() !== paragraphDocUri.toString()) {
+        vscode.window.showWarningMessage('Voice Scribe: document with last dictation is not active');
+        return;
+    }
+
+    const range = new vscode.Range(paragraphStart, paragraphEnd);
+    const paragraphText = editor.document.getText(range).trim();
+    if (!paragraphText) {
+        return;
+    }
+
+    // Gather surrounding context (a few lines before/after) for Claude
+    const beforeLine = Math.max(0, range.start.line - 3);
+    const afterLine = Math.min(editor.document.lineCount - 1, range.end.line + 2);
+    const beforeText = editor.document.getText(
+        new vscode.Range(new vscode.Position(beforeLine, 0), range.start)
+    );
+    const afterText = editor.document.getText(
+        new vscode.Range(range.end, editor.document.lineAt(afterLine).range.end)
+    );
+
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(editor.document.uri);
+    const cwd = workspaceFolder?.uri.fsPath ?? path.dirname(editor.document.uri.fsPath);
+
+    const config = vscode.workspace.getConfiguration('voiceScribe');
+    const model = config.get<string>('polishModel', 'haiku');
+    const timeoutMs = config.get<number>('polishTimeoutMs', 30_000);
+
+    isPolishing = true;
+    updateStatusBar();
+    try {
+        await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: '$(sparkle) Polishing with Claude…', cancellable: true },
+            async (_progress, token) => {
+                token.onCancellationRequested(() => claudePolish?.cancel());
+
+                const { polished, durationMs } = await claudePolish!.polish(
+                    {
+                        text: paragraphText,
+                        languageId: editor.document.languageId,
+                        filePath: vscode.workspace.asRelativePath(editor.document.uri),
+                        cwd,
+                        beforeText,
+                        afterText,
+                    },
+                    { model, timeoutMs }
+                );
+
+                if (token.isCancellationRequested) { return; }
+                if (!polished || polished === paragraphText) {
+                    vscode.window.setStatusBarMessage(`$(sparkle) Polish: no changes (${durationMs}ms)`, 3000);
+                    return;
+                }
+
+                // Preserve trailing whitespace behavior: original had a trailing space
+                const originalEndsWithSpace = editor.document.getText(range).endsWith(' ');
+                const replacement = originalEndsWithSpace ? polished + ' ' : polished;
+
+                await editor.edit(b => b.replace(range, replacement));
+                vscode.window.setStatusBarMessage(`$(sparkle) Polished in ${durationMs}ms`, 3000);
+            }
+        );
+    } finally {
+        isPolishing = false;
+        // Reset paragraph span — polish completed or was cancelled
+        paragraphStart = null;
+        paragraphEnd = null;
+        paragraphDocUri = null;
+        updateStatusBar();
+    }
 }
 
 async function selectLanguage() {
@@ -500,7 +692,11 @@ async function configureApiKey() {
 
 function updateStatusBar() {
     statusBarItem.command = 'voiceScribe.toggleRecording';
-    if (isRecording) {
+    if (isPolishing) {
+        statusBarItem.text = '$(sparkle) Polishing...';
+        statusBarItem.tooltip = 'Claude Code is polishing the last paragraph';
+        statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+    } else if (isRecording) {
         statusBarItem.text = '$(mic) Recording...';
         statusBarItem.tooltip = 'Click to stop recording';
         statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
@@ -519,6 +715,10 @@ export function deactivate() {
     }
     if (audioCapture) {
         audioCapture.dispose();
+    }
+    if (claudePolish) {
+        claudePolish.dispose();
+        claudePolish = null;
     }
     if (statusBarItem) {
         statusBarItem.dispose();

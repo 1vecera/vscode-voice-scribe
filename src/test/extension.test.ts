@@ -46,10 +46,17 @@ describe('Extension', () => {
         const MockElevenLabsService = sinon.stub().returns(mockElevenLabsInstance);
         const MockAudioCapture = sinon.stub().returns(mockAudioCaptureInstance);
 
+        const MockClaudePolishService = sinon.stub().returns({
+            polish: sinon.stub().resolves({ polished: '', durationMs: 0 }),
+            cancel: sinon.stub(),
+            dispose: sinon.stub(),
+        });
+
         ext = proxyquire('../extension', {
             'vscode': mockVscode,
             './elevenLabsService': { ElevenLabsService: MockElevenLabsService },
             './audioCapture': { AudioCapture: MockAudioCapture },
+            './claudePolish': { ClaudePolishService: MockClaudePolishService },
         });
 
         mockContext = {
@@ -64,9 +71,9 @@ describe('Extension', () => {
     // ── activate ───────────────────────────────────────────────────────
 
     describe('activate', () => {
-        it('should register 3 commands', () => {
+        it('should register 4 commands', () => {
             ext.activate(mockContext);
-            assert.strictEqual(mockVscode.commands.registerCommand.callCount, 3);
+            assert.strictEqual(mockVscode.commands.registerCommand.callCount, 4);
         });
 
         it('should register voiceScribe.toggleRecording command', () => {
