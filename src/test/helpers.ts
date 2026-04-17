@@ -46,10 +46,20 @@ export function createMockVscode() {
             showErrorMessage: sinon.stub().resolves(undefined),
             showInformationMessage: sinon.stub().resolves(undefined),
             activeTextEditor: undefined as any,
+            visibleTextEditors: [] as any[],
+            onDidChangeTextEditorSelection: sinon.stub().returns({ dispose: sinon.stub() }),
+            withProgress: sinon.stub().callsFake((_opts: any, task: any) => task({ report: () => {} }, { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => {} }) })),
+            setStatusBarMessage: sinon.stub().returns({ dispose: sinon.stub() }),
         },
         workspace: {
             getConfiguration: sinon.stub().returns(config),
             onDidChangeConfiguration: sinon.stub().returns({ dispose: sinon.stub() }),
+            textDocuments: [] as any[],
+            asRelativePath: sinon.stub().callsFake((uri: any) => {
+                const p = typeof uri === 'string' ? uri : (uri?.fsPath ?? uri?.toString?.() ?? '');
+                return p.replace(/^.*\//, '');
+            }),
+            getWorkspaceFolder: sinon.stub().returns(undefined),
         },
         commands: {
             registerCommand: sinon.stub().returns({ dispose: sinon.stub() }),
@@ -57,6 +67,9 @@ export function createMockVscode() {
         },
         StatusBarAlignment: { Left: 1, Right: 2 },
         ConfigurationTarget: { Global: 1, Workspace: 2, WorkspaceFolder: 3 },
+        ProgressLocation: { SourceControl: 1, Window: 10, Notification: 15 },
+        TextEditorSelectionChangeKind: { Keyboard: 1, Mouse: 2, Command: 3 },
+        Uri: { file: (p: string) => ({ fsPath: p, toString: () => `file://${p}` }) },
         ThemeColor: class ThemeColor {
             id: string;
             constructor(id: string) { this.id = id; }

@@ -13,6 +13,7 @@ describe('Extension', () => {
     let mockAudioCaptureInstance: any;
     let ext: any;
     let mockContext: any;
+    let mockClaudePolishInstance: any;
 
     beforeEach(() => {
         mockVscode = createMockVscode();
@@ -46,10 +47,18 @@ describe('Extension', () => {
         const MockElevenLabsService = sinon.stub().returns(mockElevenLabsInstance);
         const MockAudioCapture = sinon.stub().returns(mockAudioCaptureInstance);
 
+        mockClaudePolishInstance = {
+            polish: sinon.stub().resolves({ polished: 'Polished text.', durationMs: 42 }),
+            cancel: sinon.stub(),
+            dispose: sinon.stub(),
+        };
+        const MockClaudePolishService = sinon.stub().returns(mockClaudePolishInstance);
+
         ext = proxyquire('../extension', {
             'vscode': mockVscode,
             './elevenLabsService': { ElevenLabsService: MockElevenLabsService },
             './audioCapture': { AudioCapture: MockAudioCapture },
+            './claudePolish': { ClaudePolishService: MockClaudePolishService },
         });
 
         mockContext = {
@@ -64,9 +73,9 @@ describe('Extension', () => {
     // ── activate ───────────────────────────────────────────────────────
 
     describe('activate', () => {
-        it('should register 3 commands', () => {
+        it('should register 4 commands', () => {
             ext.activate(mockContext);
-            assert.strictEqual(mockVscode.commands.registerCommand.callCount, 3);
+            assert.strictEqual(mockVscode.commands.registerCommand.callCount, 4);
         });
 
         it('should register voiceScribe.toggleRecording command', () => {
@@ -472,11 +481,16 @@ describe('Extension', () => {
     });
 
     // ── Helper: create mock editor ──────────────────────────────────────
-    function createMockEditor(languageId = 'plaintext') {
+    function createMockEditor(languageId = 'plaintext', opts?: { content?: string }) {
+        const content = opts?.content ?? '';
         const editBuilder: any = {
             insert: sinon.stub(),
             replace: sinon.stub(),
         };
+        const docUri = { fsPath: '/test/file.txt', toString: () => 'file:///test/file.txt' };
+        const lineAt = sinon.stub().callsFake((n: number) => ({
+            range: { start: { line: n, character: 0 }, end: { line: n, character: 80 } },
+        }));
         const editor: any = {
             edit: sinon.stub().callsFake((cb: any) => {
                 cb(editBuilder);
@@ -489,9 +503,17 @@ describe('Extension', () => {
             },
             setDecorations: sinon.stub(),
             document: {
-                positionAt: sinon.stub().returns({ line: 0, character: 0 }),
-                offsetAt: sinon.stub().returns(0),
+                positionAt: sinon.stub().callsFake((offset: number) => ({
+                    line: 0, character: offset,
+                    isBefore: (other: any) => offset < (other?.character ?? 0),
+                    isAfter: (other: any) => offset > (other?.character ?? 0),
+                })),
+                offsetAt: sinon.stub().callsFake((pos: any) => pos?.character ?? 0),
                 languageId,
+                uri: docUri,
+                getText: sinon.stub().callsFake((_range?: any) => content),
+                lineCount: content.split('\n').length,
+                lineAt,
             },
         };
         return { editor, editBuilder };
@@ -738,10 +760,10 @@ describe('Extension', () => {
 
             const execCalls = mockVscode.commands.executeCommand.args;
             const commentCalls = execCalls.filter(
-                (a: any[]) => a[0] === 'editor.action.commentLine',
+                (a: any[]) => a[0] === 'editor.action.addCommentLine',
             );
             assert.strictEqual(commentCalls.length, 1,
-                'should call editor.action.commentLine in comment mode');
+                'should call editor.action.addCommentLine in comment mode');
         });
 
         it('should not comment in plain mode (default)', async () => {
@@ -759,10 +781,10 @@ describe('Extension', () => {
 
             const execCalls = mockVscode.commands.executeCommand.args;
             const commentCalls = execCalls.filter(
-                (a: any[]) => a[0] === 'editor.action.commentLine',
+                (a: any[]) => a[0] === 'editor.action.addCommentLine',
             );
             assert.strictEqual(commentCalls.length, 0,
-                'should not call editor.action.commentLine in plain mode');
+                'should not call editor.action.addCommentLine in plain mode');
         });
 
         it('should not comment prose files in smart mode', async () => {
@@ -780,7 +802,7 @@ describe('Extension', () => {
 
             const execCalls = mockVscode.commands.executeCommand.args;
             const commentCalls = execCalls.filter(
-                (a: any[]) => a[0] === 'editor.action.commentLine',
+                (a: any[]) => a[0] === 'editor.action.addCommentLine',
             );
             assert.strictEqual(commentCalls.length, 0,
                 'should not comment markdown files in smart mode');
@@ -801,10 +823,188 @@ describe('Extension', () => {
 
             const execCalls = mockVscode.commands.executeCommand.args;
             const commentCalls = execCalls.filter(
-                (a: any[]) => a[0] === 'editor.action.commentLine',
+                (a: any[]) => a[0] === 'editor.action.addCommentLine',
             );
             assert.strictEqual(commentCalls.length, 1,
-                'should call editor.action.commentLine for code files in smart mode');
+                'should call editor.action.addCommentLine for code files in smart mode');
+        });
+    });
+
+    // ── polish voice triggers ─────────────────────────────────────────
+
+    describe('polish voice triggers', () => {
+        it('should register voiceScribe.polishLast command', () => {
+            ext.activate(mockContext);
+            assert.ok('voiceScribe.polishLast' in registeredCommands,
+                'polishLast command should be registered');
+        });
+
+        it('"polish that" should invoke polishLast, not insert the phrase', async () => {
+            mockVscode._configValues.set('apiKey', 'test-key');
+            mockVscode._configValues.set('enableVoiceCommands', true);
+            ext.activate(mockContext);
+
+            const { editor, editBuilder } = createMockEditor('markdown', { content: 'hello world ' });
+            mockVscode.window.activeTextEditor = editor;
+            mockVscode.window.visibleTextEditors = [editor];
+            mockVscode.workspace.textDocuments = [editor.document];
+
+            const { onFinal } = await startRecordingAndCapture();
+
+            // First commit some text to build a paragraph range
+            onFinal('hello world');
+            await flushEditQueue();
+
+            // Reset stubs, then say "polish that"
+            editBuilder.insert.resetHistory();
+            editBuilder.replace.resetHistory();
+            onFinal('polish that');
+            await flushEditQueue();
+
+            // editBuilder should NOT have received "polish that " as inserted text
+            const allTexts = [
+                ...editBuilder.insert.args.map((a: any[]) => a[a.length - 1]),
+                ...editBuilder.replace.args.map((a: any[]) => a[a.length - 1]),
+            ];
+            for (const t of allTexts) {
+                assert.ok(
+                    !String(t).toLowerCase().includes('polish that'),
+                    `"polish that" should not be inserted as text, got: ${t}`,
+                );
+            }
+        });
+
+        it('"rewrite that" should not insert the phrase as text', async () => {
+            mockVscode._configValues.set('apiKey', 'test-key');
+            mockVscode._configValues.set('enableVoiceCommands', true);
+            ext.activate(mockContext);
+
+            const { editor, editBuilder } = createMockEditor('markdown', { content: 'some text ' });
+            mockVscode.window.activeTextEditor = editor;
+            mockVscode.window.visibleTextEditors = [editor];
+            mockVscode.workspace.textDocuments = [editor.document];
+
+            const { onFinal } = await startRecordingAndCapture();
+
+            onFinal('some text');
+            await flushEditQueue();
+            editBuilder.insert.resetHistory();
+            editBuilder.replace.resetHistory();
+
+            onFinal('rewrite that');
+            await flushEditQueue();
+
+            const allTexts = [
+                ...editBuilder.insert.args.map((a: any[]) => a[a.length - 1]),
+                ...editBuilder.replace.args.map((a: any[]) => a[a.length - 1]),
+            ];
+            for (const t of allTexts) {
+                assert.ok(
+                    !String(t).toLowerCase().includes('rewrite that'),
+                    `"rewrite that" should not be inserted as text, got: ${t}`,
+                );
+            }
+        });
+
+        it('"clean it up" should not insert the phrase as text', async () => {
+            mockVscode._configValues.set('apiKey', 'test-key');
+            mockVscode._configValues.set('enableVoiceCommands', true);
+            ext.activate(mockContext);
+
+            const { editor, editBuilder } = createMockEditor('markdown', { content: 'some text ' });
+            mockVscode.window.activeTextEditor = editor;
+            mockVscode.window.visibleTextEditors = [editor];
+            mockVscode.workspace.textDocuments = [editor.document];
+
+            const { onFinal } = await startRecordingAndCapture();
+
+            onFinal('some text');
+            await flushEditQueue();
+            editBuilder.insert.resetHistory();
+            editBuilder.replace.resetHistory();
+
+            onFinal('clean it up');
+            await flushEditQueue();
+
+            const allTexts = [
+                ...editBuilder.insert.args.map((a: any[]) => a[a.length - 1]),
+                ...editBuilder.replace.args.map((a: any[]) => a[a.length - 1]),
+            ];
+            for (const t of allTexts) {
+                assert.ok(
+                    !String(t).toLowerCase().includes('clean it up'),
+                    `"clean it up" should not be inserted as text, got: ${t}`,
+                );
+            }
+        });
+
+        it('should strip trailing punctuation from trigger phrases', async () => {
+            mockVscode._configValues.set('apiKey', 'test-key');
+            mockVscode._configValues.set('enableVoiceCommands', true);
+            ext.activate(mockContext);
+
+            const { editor, editBuilder } = createMockEditor('markdown', { content: 'text ' });
+            mockVscode.window.activeTextEditor = editor;
+            mockVscode.window.visibleTextEditors = [editor];
+            mockVscode.workspace.textDocuments = [editor.document];
+
+            const { onFinal } = await startRecordingAndCapture();
+
+            onFinal('some text');
+            await flushEditQueue();
+            editBuilder.insert.resetHistory();
+            editBuilder.replace.resetHistory();
+
+            // Scribe might transcribe with trailing period
+            onFinal('Polish that.');
+            await flushEditQueue();
+
+            // Should still trigger polish, not insert "Polish that."
+            const allTexts = [
+                ...editBuilder.insert.args.map((a: any[]) => a[a.length - 1]),
+                ...editBuilder.replace.args.map((a: any[]) => a[a.length - 1]),
+            ];
+            for (const t of allTexts) {
+                assert.ok(
+                    !String(t).toLowerCase().includes('polish that'),
+                    `"Polish that." should trigger polish, not insert text, got: ${t}`,
+                );
+            }
+        });
+
+        it('should not trigger polish when voice commands disabled', async () => {
+            mockVscode._configValues.set('apiKey', 'test-key');
+            // enableVoiceCommands defaults to false
+            ext.activate(mockContext);
+
+            const { editor } = createMockEditor('markdown');
+            mockVscode.window.activeTextEditor = editor;
+
+            const { onFinal } = await startRecordingAndCapture();
+            editor.edit.resetHistory();
+
+            // "polish that" should be inserted as regular text
+            onFinal('polish that');
+            await flushEditQueue();
+
+            sinon.assert.called(editor.edit);
+        });
+    });
+
+    // ── polishLast command ────────────────────────────────────────────
+
+    describe('polishLast command', () => {
+        it('should show info message when nothing to polish', async () => {
+            ext.activate(mockContext);
+            mockVscode.window.showInformationMessage.resetHistory();
+
+            await registeredCommands['voiceScribe.polishLast']();
+            await flushEditQueue();
+
+            sinon.assert.calledWith(
+                mockVscode.window.showInformationMessage,
+                'Voice Scribe: nothing to polish yet',
+            );
         });
     });
 });
