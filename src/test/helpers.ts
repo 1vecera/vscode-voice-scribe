@@ -54,6 +54,12 @@ export function createMockVscode() {
         workspace: {
             getConfiguration: sinon.stub().returns(config),
             onDidChangeConfiguration: sinon.stub().returns({ dispose: sinon.stub() }),
+            textDocuments: [] as any[],
+            asRelativePath: sinon.stub().callsFake((uri: any) => {
+                const p = typeof uri === 'string' ? uri : (uri?.fsPath ?? uri?.toString?.() ?? '');
+                return p.replace(/^.*\//, '');
+            }),
+            getWorkspaceFolder: sinon.stub().returns(undefined),
         },
         commands: {
             registerCommand: sinon.stub().returns({ dispose: sinon.stub() }),
