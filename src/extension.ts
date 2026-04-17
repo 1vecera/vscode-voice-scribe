@@ -65,7 +65,7 @@ function startIdleTimer() {
         // Reset the pause-polish flag when user starts speaking again
         if (idleMs < 2000) { pausePolishFired = false; }
 
-        if (idleMs >= IDLE_TIMEOUT_MS) {
+        if (idleMs >= IDLE_TIMEOUT_MS && isRecording) {
             stopIdleTimer();
             vscode.window.showInformationMessage('Voice Scribe: auto-stopped after 2 minutes of silence.');
             stopRecording();
