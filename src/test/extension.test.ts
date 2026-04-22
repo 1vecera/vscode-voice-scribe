@@ -723,7 +723,7 @@ describe('Extension', () => {
     // ── auto-comment mode ───────────────────────────────────────────────
 
     describe('auto-comment mode', () => {
-        it('should run commentLine command when insertMode is comment', async () => {
+        it('should run addCommentLine command when insertMode is comment', async () => {
             mockVscode._configValues.set('apiKey', 'test-key');
             mockVscode._configValues.set('insertMode', 'comment');
             ext.activate(mockContext);
@@ -738,10 +738,10 @@ describe('Extension', () => {
 
             const execCalls = mockVscode.commands.executeCommand.args;
             const commentCalls = execCalls.filter(
-                (a: any[]) => a[0] === 'editor.action.commentLine',
+                (a: any[]) => a[0] === 'editor.action.addCommentLine',
             );
             assert.strictEqual(commentCalls.length, 1,
-                'should call editor.action.commentLine in comment mode');
+                'should call editor.action.addCommentLine in comment mode');
         });
 
         it('should not comment in plain mode (default)', async () => {
@@ -759,10 +759,10 @@ describe('Extension', () => {
 
             const execCalls = mockVscode.commands.executeCommand.args;
             const commentCalls = execCalls.filter(
-                (a: any[]) => a[0] === 'editor.action.commentLine',
+                (a: any[]) => a[0] === 'editor.action.addCommentLine',
             );
             assert.strictEqual(commentCalls.length, 0,
-                'should not call editor.action.commentLine in plain mode');
+                'should not call editor.action.addCommentLine in plain mode');
         });
 
         it('should not comment prose files in smart mode', async () => {
@@ -780,7 +780,7 @@ describe('Extension', () => {
 
             const execCalls = mockVscode.commands.executeCommand.args;
             const commentCalls = execCalls.filter(
-                (a: any[]) => a[0] === 'editor.action.commentLine',
+                (a: any[]) => a[0] === 'editor.action.addCommentLine',
             );
             assert.strictEqual(commentCalls.length, 0,
                 'should not comment markdown files in smart mode');
@@ -801,10 +801,10 @@ describe('Extension', () => {
 
             const execCalls = mockVscode.commands.executeCommand.args;
             const commentCalls = execCalls.filter(
-                (a: any[]) => a[0] === 'editor.action.commentLine',
+                (a: any[]) => a[0] === 'editor.action.addCommentLine',
             );
             assert.strictEqual(commentCalls.length, 1,
-                'should call editor.action.commentLine for code files in smart mode');
+                'should call editor.action.addCommentLine for code files in smart mode');
         });
     });
 });
