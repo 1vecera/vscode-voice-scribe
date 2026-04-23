@@ -2,7 +2,7 @@
   "name": "voice-scribe",
   "displayName": "Voice Scribe",
   "description": "High-quality real-time voice-to-text for VS Code with live rewriting",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "1vecera",
   "icon": "images/icon.png",
   "engines": {
@@ -23,7 +23,8 @@
   "activationEvents": [
     "onCommand:voiceScribe.toggleRecording",
     "onCommand:voiceScribe.configureApiKey",
-    "onCommand:voiceScribe.selectLanguage"
+    "onCommand:voiceScribe.selectLanguage",
+    "onCommand:voiceScribe.setRecordingPrefix"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -39,6 +40,10 @@
       {
         "command": "voiceScribe.toggleRecording",
         "title": "Voice Scribe: Toggle Recording"
+      },
+      {
+        "command": "voiceScribe.setRecordingPrefix",
+        "title": "Voice Scribe: Set Recording Prefix"
       }
     ],
     "configuration": {
@@ -223,6 +228,11 @@
             "Enhanced: basic filters plus RNNoise neural noise suppression (downloads a small model on first use)"
           ],
           "description": "Audio noise reduction level applied before sending audio to the speech recognition API."
+        },
+        "voiceScribe.recordingPrefix": {
+          "type": "string",
+          "default": "",
+          "description": "Custom string inserted at the cursor when recording starts (e.g. '// '). Set via the 'Voice Scribe: Set Recording Prefix' command."
         },
         "voiceScribe.autoVocabulary": {
           "type": "boolean",

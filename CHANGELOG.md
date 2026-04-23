@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+- Recording prefix: custom string inserted at the cursor when recording starts (configurable via `Voice Scribe: Set Recording Prefix` command)
+
 ## 0.3.0
 
 - Toggle recording command with idle auto-stop

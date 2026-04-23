@@ -131,9 +131,15 @@ export function activate(context: vscode.ExtensionContext) {
         () => selectLanguage()
     );
 
+    const setRecordingPrefixCommand = vscode.commands.registerCommand(
+        'voiceScribe.setRecordingPrefix',
+        () => setRecordingPrefix()
+    );
+
     context.subscriptions.push(toggleRecordingCommand);
     context.subscriptions.push(configureApiKeyCommand);
     context.subscriptions.push(selectLanguageCommand);
+    context.subscriptions.push(setRecordingPrefixCommand);
 
     // Listen for configuration changes
     context.subscriptions.push(
@@ -192,6 +198,15 @@ async function startRecording() {
         liveRange = null;
         editQueue = Promise.resolve();
         clearLiveDecoration(vscode.window.activeTextEditor);
+
+        // Insert recording prefix at cursor, if configured
+        const prefix = vscode.workspace.getConfiguration('voiceScribe').get<string>('recordingPrefix', '');
+        if (prefix) {
+            const editor = vscode.window.activeTextEditor;
+            if (editor) {
+                await editor.edit(b => b.insert(editor.selection.active, prefix));
+            }
+        }
 
         // Auto-populate vocabulary from workspace (Task 10)
         // Lazy-load to avoid requiring vscode in non-extension-host environments (tests)
@@ -481,6 +496,24 @@ async function selectLanguage() {
         await config.update('language', picked.code, vscode.ConfigurationTarget.Global);
         vscode.window.showInformationMessage(`Voice Scribe language set to ${picked.label}`);
     }
+}
+
+async function setRecordingPrefix() {
+    const config = vscode.workspace.getConfiguration('voiceScribe');
+    const current = config.get<string>('recordingPrefix', '');
+
+    const value = await vscode.window.showInputBox({
+        prompt: 'Custom string inserted at the cursor when recording starts',
+        placeHolder: "e.g. '// ' or 'TODO: ' — leave empty to disable",
+        value: current,
+    });
+
+    if (value === undefined) { return; }
+
+    await config.update('recordingPrefix', value, vscode.ConfigurationTarget.Global);
+    vscode.window.showInformationMessage(
+        value ? `Voice Scribe prefix set to "${value}"` : 'Voice Scribe prefix cleared'
+    );
 }
 
 async function configureApiKey() {
