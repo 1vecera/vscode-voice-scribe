@@ -13,3 +13,8 @@ tsconfig.json
 out/test/**
 tracking-*.md
 linkedin-*.md
+backlog.md
+CLAUDE.md
+tmp/**
+.claude/**
+*.vsix

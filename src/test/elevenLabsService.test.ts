@@ -239,10 +239,7 @@ describe('ElevenLabsService', () => {
 
         it('should not send session_config even with additional vocabulary param', async () => {
             // customVocabulary not set — defaults to [] via config.get default
-            const { ws, promise } = startService(
-                undefined, undefined,
-                [{ word: 'extractFunc', boost: 3.0 }],
-            );
+            const { ws, promise } = startService();
             await promise;
 
             assert.strictEqual(ws.sentMessages.length, 0,

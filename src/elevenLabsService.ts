@@ -39,7 +39,7 @@ export class ElevenLabsService {
     async startTranscription(
         onPartial: (text: string) => void,
         onFinal: (text: string) => void,
-        additionalVocabulary?: Array<{ word: string; boost: number }>
+        _additionalVocabulary?: Array<{ word: string; boost: number }>
     ): Promise<void> {
         if (this.isTranscribing) {
             throw new Error('Already transcribing');

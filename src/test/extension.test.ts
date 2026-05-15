@@ -73,9 +73,9 @@ describe('Extension', () => {
     // ── activate ───────────────────────────────────────────────────────
 
     describe('activate', () => {
-        it('should register 4 commands', () => {
+        it('should register 5 commands', () => {
             ext.activate(mockContext);
-            assert.strictEqual(mockVscode.commands.registerCommand.callCount, 4);
+            assert.strictEqual(mockVscode.commands.registerCommand.callCount, 5);
         });
 
         it('should register voiceScribe.toggleRecording command', () => {
@@ -745,7 +745,7 @@ describe('Extension', () => {
     // ── auto-comment mode ───────────────────────────────────────────────
 
     describe('auto-comment mode', () => {
-        it('should run commentLine command when insertMode is comment', async () => {
+        it('should run addCommentLine command when insertMode is comment', async () => {
             mockVscode._configValues.set('apiKey', 'test-key');
             mockVscode._configValues.set('insertMode', 'comment');
             ext.activate(mockContext);

@@ -178,10 +178,16 @@ export function activate(context: vscode.ExtensionContext) {
         () => polishLast()
     );
 
+    const setRecordingPrefixCommand = vscode.commands.registerCommand(
+        'voiceScribe.setRecordingPrefix',
+        () => setRecordingPrefix()
+    );
+
     context.subscriptions.push(toggleRecordingCommand);
     context.subscriptions.push(configureApiKeyCommand);
     context.subscriptions.push(selectLanguageCommand);
     context.subscriptions.push(polishLastCommand);
+    context.subscriptions.push(setRecordingPrefixCommand);
 
     // Invalidate the tracked paragraph when the user clicks/arrows away from it —
     // otherwise "polish that" could rewrite an unintended span.
@@ -265,6 +271,15 @@ async function startRecording() {
         editQueue = Promise.resolve();
         clearLiveDecoration(vscode.window.activeTextEditor);
 
+        // Insert recording prefix at cursor, if configured
+        const prefix = vscode.workspace.getConfiguration('voiceScribe').get<string>('recordingPrefix', '');
+        if (prefix) {
+            const editor = vscode.window.activeTextEditor;
+            if (editor) {
+                await editor.edit(b => b.insert(editor.selection.active, prefix));
+            }
+        }
+
         // Auto-populate vocabulary from workspace (Task 10)
         // Lazy-load to avoid requiring vscode in non-extension-host environments (tests)
         let autoVocabulary: Array<{ word: string; boost: number }> | undefined;
@@ -312,6 +327,13 @@ async function startRecording() {
         isRecording = false;
         stopIdleTimer();
         updateStatusBar();
+        // Best-effort cleanup of the ElevenLabs side. If the WebSocket opened
+        // but audio capture then failed, the service's `isTranscribing` flag
+        // would otherwise stay true until ElevenLabs' idle close (~15s), and
+        // the next attempt would throw "Already transcribing".
+        if (elevenLabsService) {
+            await elevenLabsService.stopTranscription().catch(() => { /* ignore */ });
+        }
         await vscode.commands.executeCommand('setContext', 'voiceScribe.recording', false);
         vscode.window.showErrorMessage(`Failed to start recording: ${error}`);
     }
@@ -673,6 +695,24 @@ async function selectLanguage() {
         await config.update('language', picked.code, vscode.ConfigurationTarget.Global);
         vscode.window.showInformationMessage(`Voice Scribe language set to ${picked.label}`);
     }
+}
+
+async function setRecordingPrefix() {
+    const config = vscode.workspace.getConfiguration('voiceScribe');
+    const current = config.get<string>('recordingPrefix', '');
+
+    const value = await vscode.window.showInputBox({
+        prompt: 'Custom string inserted at the cursor when recording starts',
+        placeHolder: "e.g. '// ' or 'TODO: ' — leave empty to disable",
+        value: current,
+    });
+
+    if (value === undefined) { return; }
+
+    await config.update('recordingPrefix', value, vscode.ConfigurationTarget.Global);
+    vscode.window.showInformationMessage(
+        value ? `Voice Scribe prefix set to "${value}"` : 'Voice Scribe prefix cleared'
+    );
 }
 
 async function configureApiKey() {
