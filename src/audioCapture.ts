@@ -116,6 +116,63 @@ export class AudioCapture {
         }
     }
 
+    /**
+     * Enumerate Windows DirectShow audio input devices.
+     * Returns the friendly names ffmpeg reports.
+     *
+     * Implementation note: `ffmpeg -list_devices true -f dshow -i dummy`
+     * writes the device list to stderr and exits non-zero (because the
+     * dummy input is invalid). We only care about parsing stderr.
+     */
+    private async enumerateWindowsAudioDevices(): Promise<string[]> {
+        return new Promise((resolve) => {
+            const chunks: string[] = [];
+            const probe = spawn(this.ffmpegPath, [
+                '-hide_banner', '-list_devices', 'true',
+                '-f', 'dshow', '-i', 'dummy'
+            ]);
+            probe.stderr?.on('data', (data: Buffer) => chunks.push(data.toString()));
+            probe.on('close', () => {
+                const text = chunks.join('');
+                // Lines look like:  [in#0 @ ...] "Microphone (Device Name)" (audio)
+                const re = /"([^"]+)"\s*\(audio\)/g;
+                const devices: string[] = [];
+                let m: RegExpExecArray | null;
+                while ((m = re.exec(text)) !== null) {
+                    devices.push(m[1]);
+                }
+                resolve(devices);
+            });
+            probe.on('error', () => resolve([]));
+        });
+    }
+
+    /**
+     * Decide which DirectShow audio device to use on Windows.
+     *  1. If `voiceScribe.audioDevice` is set, use it verbatim.
+     *  2. Otherwise enumerate via ffmpeg and pick the first audio device.
+     *  3. Throws if no devices are found.
+     *
+     * Fixes the prior hard-coded `audio=default`, which is not a valid
+     * DirectShow device alias and caused audio capture to fail silently
+     * on every Windows install.
+     */
+    private async resolveWindowsAudioDevice(config: vscode.WorkspaceConfiguration): Promise<string> {
+        const configured = (config.get<string>('audioDevice', '') || '').trim();
+        if (configured) {
+            return configured;
+        }
+        const devices = await this.enumerateWindowsAudioDevices();
+        if (devices.length === 0) {
+            throw new Error(
+                'No DirectShow audio input devices found. ' +
+                'Set "voiceScribe.audioDevice" to your microphone name explicitly, ' +
+                'or run `ffmpeg -list_devices true -f dshow -i dummy` from a terminal to verify ffmpeg sees your microphone.'
+            );
+        }
+        return devices[0];
+    }
+
     async initialize(onAudioChunk: (chunk: Buffer) => void): Promise<void> {
         this.onAudioChunk = onAudioChunk;
         this.ffmpegPath = this.resolveFfmpegPath();
@@ -169,26 +226,34 @@ export class AudioCapture {
         }
         // 'off' leaves afFilter as null
 
+        // ── Resolve platform-specific input format/device ─────────────
+        // Done outside the Promise constructor below because the Windows
+        // branch awaits device enumeration.
+        const platform = process.platform;
+        let inputFormat: string;
+        let inputDevice: string;
+
+        if (platform === 'darwin') {
+            inputFormat = 'avfoundation';
+            inputDevice = ':default';
+        } else if (platform === 'linux') {
+            inputFormat = 'alsa';
+            inputDevice = 'default';
+        } else if (platform === 'win32') {
+            inputFormat = 'dshow';
+            try {
+                const deviceName = await this.resolveWindowsAudioDevice(config);
+                inputDevice = `audio=${deviceName}`;
+            } catch (err) {
+                vscode.window.showErrorMessage(`Voice Scribe: ${(err as Error).message}`);
+                throw err;
+            }
+        } else {
+            throw new Error(`Unsupported platform: ${platform}`);
+        }
+
         return new Promise((resolve, reject) => {
             try {
-                // ── Platform-specific input format/device ─────────────
-                const platform = process.platform;
-                let inputFormat: string;
-                let inputDevice: string;
-
-                if (platform === 'darwin') {
-                    inputFormat = 'avfoundation';
-                    inputDevice = ':default';
-                } else if (platform === 'linux') {
-                    inputFormat = 'alsa';
-                    inputDevice = 'default';
-                } else if (platform === 'win32') {
-                    inputFormat = 'dshow';
-                    inputDevice = 'audio=default';
-                } else {
-                    throw new Error(`Unsupported platform: ${platform}`);
-                }
-
                 const ffmpegArgs = [
                     '-f', inputFormat,
                     '-i', inputDevice,

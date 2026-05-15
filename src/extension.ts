@@ -255,6 +255,13 @@ async function startRecording() {
         isRecording = false;
         stopIdleTimer();
         updateStatusBar();
+        // Best-effort cleanup of the ElevenLabs side. If the WebSocket opened
+        // but audio capture then failed, the service's `isTranscribing` flag
+        // would otherwise stay true until ElevenLabs' idle close (~15s), and
+        // the next attempt would throw "Already transcribing".
+        if (elevenLabsService) {
+            await elevenLabsService.stopTranscription().catch(() => { /* ignore */ });
+        }
         await vscode.commands.executeCommand('setContext', 'voiceScribe.recording', false);
         vscode.window.showErrorMessage(`Failed to start recording: ${error}`);
     }
