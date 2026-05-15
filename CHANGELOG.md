@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.2
+
+- Keyterms now save to **workspace** settings (`.vscode/settings.json`) by default — each project keeps its own list. Falls back to global when no workspace is open.
+- Generate-keyterms popup now opens the Settings page directly (no two-button prompt).
+
 ## 0.4.1
 
 - Fix `spawn claude ENOENT` when VS Code is launched from Dock/Spotlight on macOS. Polish and keyterm generation now resolve the absolute path to the `claude` CLI via `~/.local/bin/claude`, Homebrew, or login-shell PATH — same pattern as the ffmpeg fix in v0.1.3.

@@ -733,22 +733,23 @@ async function generateKeytermsCommandHandler() {
             try {
                 const result = await generateKeyterms();
                 const config = vscode.workspace.getConfiguration('voiceScribe');
-                await config.update('keyterms', result.keyterms, vscode.ConfigurationTarget.Global);
 
-                const action = await vscode.window.showInformationMessage(
-                    `Voice Scribe: saved ${result.keyterms.length} keyterms (${result.durationMs} ms).`,
-                    'Open Settings',
-                    'Show List',
+                // Save to workspace (.vscode/settings.json) so each project has
+                // its own keyterm list. Fall back to Global if no workspace is open.
+                const hasWorkspace = (vscode.workspace.workspaceFolders ?? []).length > 0;
+                const target = hasWorkspace
+                    ? vscode.ConfigurationTarget.Workspace
+                    : vscode.ConfigurationTarget.Global;
+                await config.update('keyterms', result.keyterms, target);
+
+                const scopeLabel = hasWorkspace ? 'workspace' : 'global';
+                vscode.window.showInformationMessage(
+                    `Voice Scribe: saved ${result.keyterms.length} keyterms to ${scopeLabel} settings (${result.durationMs} ms).`,
                 );
-                if (action === 'Open Settings') {
-                    await vscode.commands.executeCommand('workbench.action.openSettings', 'voiceScribe.keyterms');
-                } else if (action === 'Show List') {
-                    const doc = await vscode.workspace.openTextDocument({
-                        language: 'plaintext',
-                        content: result.keyterms.join('\n'),
-                    });
-                    await vscode.window.showTextDocument(doc);
-                }
+                await vscode.commands.executeCommand(
+                    'workbench.action.openSettings',
+                    'voiceScribe.keyterms',
+                );
             } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 vscode.window.showErrorMessage(`Voice Scribe: keyterm generation failed — ${msg}`);
