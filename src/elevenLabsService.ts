@@ -65,13 +65,18 @@ export class ElevenLabsService {
 
                 const params = new URLSearchParams({
                     model_id: 'scribe_v2_realtime',   // REQUIRED
-                    audio_format: 'pcm_16000',        // 16 kHz 16-bit LE mono
+                    audio_format: 'pcm_16000',        // server resamples to 16 kHz internally
                     commit_strategy: 'vad',           // auto-commit on silence
                     tag_audio_events: 'false',        // don't insert (laughter) etc.
                     num_speakers: '1',                // single speaker dictation
-                    no_verbatim: 'true',              // strip filler words & false starts
+                    // no_verbatim=false: keep literal output. The "filler" heuristic
+                    // can swallow short Czech particles and false starts that matter
+                    // for code dictation (e.g., variable names mid-stream).
+                    no_verbatim: 'false',
                     // ── VAD tuning (from sensitivity preset) ─────────
-                    vad_silence_threshold_secs: '0.8', // commit faster (default 1.5)
+                    // 0.5 s silence is the dictation sweet spot per ElevenLabs docs;
+                    // default 1.5 s is tuned for conversational agents.
+                    vad_silence_threshold_secs: '0.5',
                     vad_threshold: vad.threshold,
                     min_speech_duration_ms: vad.minSpeech,
                     min_silence_duration_ms: vad.minSilence,
@@ -81,6 +86,20 @@ export class ElevenLabsService {
                 if (language !== 'auto') {
                     params.set('language_code', language);
                 }
+
+                // ── Keyterm biasing ──────────────────────────────────
+                // Realtime cap: 50 terms × ≤20 chars each (per ElevenLabs docs).
+                // Adds ~20% to per-minute cost when non-empty.
+                const configKeyterms = config.get<string[]>('keyterms', []) ?? [];
+                const argKeyterms = (_additionalVocabulary ?? []).map(v => v.word);
+                const keyterms = sanitizeKeyterms([...configKeyterms, ...argKeyterms]);
+                for (const term of keyterms) {
+                    params.append('keyterms', term);
+                }
+                if (keyterms.length > 0) {
+                    log(`Keyterms: ${keyterms.length} active`);
+                }
+
                 const wsUrl = `wss://api.elevenlabs.io/v1/speech-to-text/realtime?${params}`;
 
                 log(`Connecting to ${wsUrl}`);
@@ -221,9 +240,10 @@ export class ElevenLabsService {
             message_type: 'input_audio_chunk',
             audio_base_64: audioData.toString('base64'),
         };
-        // previous_text is only allowed on the FIRST audio chunk
+        // previous_text is only allowed on the FIRST audio chunk and works
+        // best when it's under 50 characters long (per ElevenLabs docs).
         if (!this.sentFirstChunk && this.fullTranscript.length > 0) {
-            payload.previous_text = this.fullTranscript.slice(-200);
+            payload.previous_text = this.fullTranscript.slice(-50);
         }
         this.sentFirstChunk = true;
         this.ws.send(JSON.stringify(payload));
@@ -245,4 +265,26 @@ export class ElevenLabsService {
             outputChannel = null;
         }
     }
+}
+
+/**
+ * Sanitize a list of keyterms to the Scribe v2 Realtime constraints:
+ *  - each term ≤ 20 chars (after trim)
+ *  - trimmed, non-empty
+ *  - deduplicated (case-insensitive)
+ *  - max 50 entries
+ */
+export function sanitizeKeyterms(terms: string[]): string[] {
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const raw of terms) {
+        const term = String(raw ?? '').trim();
+        if (!term || term.length > 20) { continue; }
+        const key = term.toLowerCase();
+        if (seen.has(key)) { continue; }
+        seen.add(key);
+        result.push(term);
+        if (result.length >= 50) { break; }
+    }
+    return result;
 }

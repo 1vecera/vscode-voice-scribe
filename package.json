@@ -25,7 +25,8 @@
     "onCommand:voiceScribe.configureApiKey",
     "onCommand:voiceScribe.selectLanguage",
     "onCommand:voiceScribe.polishLast",
-    "onCommand:voiceScribe.setRecordingPrefix"
+    "onCommand:voiceScribe.setRecordingPrefix",
+    "onCommand:voiceScribe.generateKeyterms"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -49,6 +50,10 @@
       {
         "command": "voiceScribe.setRecordingPrefix",
         "title": "Voice Scribe: Set Recording Prefix"
+      },
+      {
+        "command": "voiceScribe.generateKeyterms",
+        "title": "Voice Scribe: Generate Keyterms from Open Files (Claude Opus)"
       }
     ],
     "configuration": {
@@ -273,6 +278,16 @@
           "type": "number",
           "default": 0,
           "description": "If greater than 0, automatically polish the last paragraph after this many milliseconds of silence during recording. Set to 0 to disable (default). Recommended: 4000-8000."
+        },
+        "voiceScribe.keyterms": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string",
+            "maxLength": 20
+          },
+          "maxItems": 50,
+          "description": "Keyterms biased during transcription (Scribe v2 Realtime). Max 50 entries, each ≤20 chars. Adds ~20% to per-minute cost when non-empty. Use 'Voice Scribe: Generate Keyterms from Open Files (Claude Opus)' to auto-fill from README.md, CLAUDE.md, and currently open files."
         }
       }
     },
@@ -288,6 +303,11 @@
         "key": "ctrl+alt+p",
         "mac": "cmd+alt+p",
         "when": "editorTextFocus"
+      },
+      {
+        "command": "voiceScribe.selectLanguage",
+        "key": "ctrl+alt+l",
+        "mac": "cmd+alt+l"
       }
     ]
   },

@@ -3,6 +3,7 @@ import * as path from 'path';
 import { ElevenLabsService } from './elevenLabsService';
 import { AudioCapture } from './audioCapture';
 import { ClaudePolishService } from './claudePolish';
+import { generateKeyterms } from './claudeKeyterms';
 
 let elevenLabsService: ElevenLabsService | null = null;
 let audioCapture: AudioCapture | null = null;
@@ -183,11 +184,17 @@ export function activate(context: vscode.ExtensionContext) {
         () => setRecordingPrefix()
     );
 
+    const generateKeytermsCommand = vscode.commands.registerCommand(
+        'voiceScribe.generateKeyterms',
+        () => generateKeytermsCommandHandler()
+    );
+
     context.subscriptions.push(toggleRecordingCommand);
     context.subscriptions.push(configureApiKeyCommand);
     context.subscriptions.push(selectLanguageCommand);
     context.subscriptions.push(polishLastCommand);
     context.subscriptions.push(setRecordingPrefixCommand);
+    context.subscriptions.push(generateKeytermsCommand);
 
     // Invalidate the tracked paragraph when the user clicks/arrows away from it —
     // otherwise "polish that" could rewrite an unintended span.
@@ -712,6 +719,41 @@ async function setRecordingPrefix() {
     await config.update('recordingPrefix', value, vscode.ConfigurationTarget.Global);
     vscode.window.showInformationMessage(
         value ? `Voice Scribe prefix set to "${value}"` : 'Voice Scribe prefix cleared'
+    );
+}
+
+async function generateKeytermsCommandHandler() {
+    await vscode.window.withProgress(
+        {
+            location: vscode.ProgressLocation.Notification,
+            title: 'Voice Scribe: generating keyterms with Claude Opus…',
+            cancellable: false,
+        },
+        async () => {
+            try {
+                const result = await generateKeyterms();
+                const config = vscode.workspace.getConfiguration('voiceScribe');
+                await config.update('keyterms', result.keyterms, vscode.ConfigurationTarget.Global);
+
+                const action = await vscode.window.showInformationMessage(
+                    `Voice Scribe: saved ${result.keyterms.length} keyterms (${result.durationMs} ms).`,
+                    'Open Settings',
+                    'Show List',
+                );
+                if (action === 'Open Settings') {
+                    await vscode.commands.executeCommand('workbench.action.openSettings', 'voiceScribe.keyterms');
+                } else if (action === 'Show List') {
+                    const doc = await vscode.workspace.openTextDocument({
+                        language: 'plaintext',
+                        content: result.keyterms.join('\n'),
+                    });
+                    await vscode.window.showTextDocument(doc);
+                }
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                vscode.window.showErrorMessage(`Voice Scribe: keyterm generation failed — ${msg}`);
+            }
+        },
     );
 }
 
