@@ -59,6 +59,13 @@ describe('Extension', () => {
             './elevenLabsService': { ElevenLabsService: MockElevenLabsService },
             './audioCapture': { AudioCapture: MockAudioCapture },
             './claudePolish': { ClaudePolishService: MockClaudePolishService },
+            './claudeKeyterms': {
+                generateKeyterms: sinon.stub().resolves({
+                    keyterms: ['numpy', 'pandas'],
+                    rejected: [],
+                    durationMs: 10,
+                }),
+            },
         });
 
         mockContext = {
@@ -73,9 +80,9 @@ describe('Extension', () => {
     // ── activate ───────────────────────────────────────────────────────
 
     describe('activate', () => {
-        it('should register 5 commands', () => {
+        it('should register 6 commands', () => {
             ext.activate(mockContext);
-            assert.strictEqual(mockVscode.commands.registerCommand.callCount, 5);
+            assert.strictEqual(mockVscode.commands.registerCommand.callCount, 6);
         });
 
         it('should register voiceScribe.toggleRecording command', () => {

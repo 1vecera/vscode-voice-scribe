@@ -247,6 +247,65 @@ describe('ElevenLabsService', () => {
         });
     });
 
+    // ── keyterms (URL biasing) ─────────────────────────────────────────
+
+    describe('keyterms URL biasing', () => {
+        it('should append each configured keyterm as a repeated query param', async () => {
+            mockVscode._configValues.set('keyterms', ['numpy', 'useState', 'pydantic']);
+            const { ws, promise } = startService();
+            await promise;
+
+            const matches = ws.url.match(/keyterms=/g) || [];
+            assert.strictEqual(matches.length, 3, 'expected 3 keyterms= occurrences');
+            assert.ok(ws.url.includes('keyterms=numpy'));
+            assert.ok(ws.url.includes('keyterms=useState'));
+            assert.ok(ws.url.includes('keyterms=pydantic'));
+        });
+
+        it('should drop keyterms longer than 20 chars', async () => {
+            mockVscode._configValues.set('keyterms', [
+                'short',
+                'this-string-is-way-over-twenty-chars',
+                'fits',
+            ]);
+            const { ws, promise } = startService();
+            await promise;
+
+            const matches = ws.url.match(/keyterms=/g) || [];
+            assert.strictEqual(matches.length, 2);
+            assert.ok(ws.url.includes('keyterms=short'));
+            assert.ok(ws.url.includes('keyterms=fits'));
+            assert.ok(!ws.url.includes('this-string-is-way-over-twenty-chars'));
+        });
+
+        it('should deduplicate keyterms case-insensitively', async () => {
+            mockVscode._configValues.set('keyterms', ['numpy', 'NumPy', 'NUMPY']);
+            const { ws, promise } = startService();
+            await promise;
+
+            const matches = ws.url.match(/keyterms=/g) || [];
+            assert.strictEqual(matches.length, 1);
+        });
+
+        it('should cap keyterms at 50 entries', async () => {
+            const many = Array.from({ length: 75 }, (_, i) => `term${i}`);
+            mockVscode._configValues.set('keyterms', many);
+            const { ws, promise } = startService();
+            await promise;
+
+            const matches = ws.url.match(/keyterms=/g) || [];
+            assert.strictEqual(matches.length, 50);
+        });
+
+        it('should not append keyterms when config is empty', async () => {
+            const { ws, promise } = startService();
+            await promise;
+
+            assert.ok(!ws.url.includes('keyterms='),
+                'expected no keyterms= in URL when config is empty');
+        });
+    });
+
     // ── message handling ───────────────────────────────────────────────
 
     describe('message handling', () => {
