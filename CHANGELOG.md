@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.1
+
+- Fix `spawn claude ENOENT` when VS Code is launched from Dock/Spotlight on macOS. Polish and keyterm generation now resolve the absolute path to the `claude` CLI via `~/.local/bin/claude`, Homebrew, or login-shell PATH — same pattern as the ffmpeg fix in v0.1.3.
+
 ## 0.4.0
 
 - **Polish dictation with Claude Code**: voice trigger ("polish that" / "rewrite that"), keybinding `cmd/ctrl+alt+p`, optional idle-pause auto-polish. Uses subscription auth via `claude -p` (no API billing).

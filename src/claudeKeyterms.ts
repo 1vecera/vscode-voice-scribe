@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { sanitizeKeyterms } from './elevenLabsService';
+import { resolveClaudePath } from './resolveClaude';
 
 // ── Logging ─────────────────────────────────────────────────────────────────
 let outputChannel: vscode.OutputChannel | null = null;
@@ -79,9 +80,11 @@ export async function generateKeyterms(opts?: {
     ];
 
     const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+    const claudeBin = resolveClaudePath();
+    log(`claude binary: ${claudeBin}`);
 
     return new Promise<KeytermGenerationResult>((resolve, reject) => {
-        const child = spawn('claude', args, {
+        const child = spawn(claudeBin, args, {
             cwd,
             stdio: ['pipe', 'pipe', 'pipe'],
             env: process.env,

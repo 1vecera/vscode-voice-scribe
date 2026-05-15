@@ -1,5 +1,6 @@
 import { spawn, ChildProcess } from 'child_process';
 import * as vscode from 'vscode';
+import { resolveClaudePath } from './resolveClaude';
 
 // ── Logging ─────────────────────────────────────────────────────────────────
 let outputChannel: vscode.OutputChannel | null = null;
@@ -69,8 +70,11 @@ export class ClaudePolishService {
 
         log(`polish start: model=${model} chars=${ctx.text.length} lang=${ctx.languageId ?? '?'}`);
 
+        const claudeBin = resolveClaudePath();
+        log(`claude binary: ${claudeBin}`);
+
         return new Promise<PolishResult>((resolve, reject) => {
-            const child = spawn('claude', args, {
+            const child = spawn(claudeBin, args, {
                 cwd: ctx.cwd ?? process.cwd(),
                 stdio: ['pipe', 'pipe', 'pipe'],
                 env: process.env,
