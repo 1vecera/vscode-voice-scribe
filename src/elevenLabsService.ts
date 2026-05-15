@@ -69,10 +69,7 @@ export class ElevenLabsService {
                     commit_strategy: 'vad',           // auto-commit on silence
                     tag_audio_events: 'false',        // don't insert (laughter) etc.
                     num_speakers: '1',                // single speaker dictation
-                    // no_verbatim=false: keep literal output. The "filler" heuristic
-                    // can swallow short Czech particles and false starts that matter
-                    // for code dictation (e.g., variable names mid-stream).
-                    no_verbatim: 'false',
+                    no_verbatim: 'true',              // strip filler words & false starts
                     // ── VAD tuning (from sensitivity preset) ─────────
                     // 0.5 s silence is the dictation sweet spot per ElevenLabs docs;
                     // default 1.5 s is tuned for conversational agents.

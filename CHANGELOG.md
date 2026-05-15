@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0
+
+- **Polish dictation with Claude Code**: voice trigger ("polish that" / "rewrite that"), keybinding `cmd/ctrl+alt+p`, optional idle-pause auto-polish. Uses subscription auth via `claude -p` (no API billing).
+- **Auto-generated keyterms**: new command `Voice Scribe: Generate Keyterms from Open Files (Claude Opus)` extracts up to 50 identifiers from README/CLAUDE.md/open files and biases transcription via ElevenLabs' `keyterms` param (+20% per-minute cost when non-empty).
+- **Scribe v2 Realtime tuning** (research-backed):
+  - `previous_text` capped at 50 chars per ElevenLabs guidance
+  - `vad_silence_threshold_secs` dropped from 0.8 to 0.5 (dictation sweet spot)
+- Quick keybinding `cmd/ctrl+alt+l` for `Voice Scribe: Select Language`.
+
 ## 0.3.1
 
 - Recording prefix: custom string inserted at the cursor when recording starts (configurable via `Voice Scribe: Set Recording Prefix` command)
