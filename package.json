@@ -216,18 +216,23 @@
         },
         "voiceScribe.noiseReduction": {
           "type": "string",
-          "default": "neural",
+          "default": "basic",
           "enum": [
             "off",
             "basic",
             "neural"
           ],
           "enumDescriptions": [
-            "No audio filters — raw microphone input sent directly",
+            "No audio filters — raw microphone input sent directly. Recommended if your mic captures at moderate gain levels.",
             "Basic filters: highpass, lowpass, and FFT-based denoising (default)",
-            "Enhanced: basic filters plus RNNoise neural noise suppression (downloads a small model on first use)"
+            "Enhanced: basic filters plus RNNoise neural noise suppression (downloads a small model on first use). Aggressive — may suppress speech from low-gain mics."
           ],
-          "description": "Audio noise reduction level applied before sending audio to the speech recognition API."
+          "description": "Audio noise reduction level applied before sending audio to the speech recognition API. Try 'off' if dictation is being silently dropped."
+        },
+        "voiceScribe.audioDevice": {
+          "type": "string",
+          "default": "",
+          "description": "Optional: explicit input device name. On Windows, use the DirectShow device name (run `ffmpeg -list_devices true -f dshow -i dummy` to list). Leave empty to auto-detect the first available input device. Has no effect on macOS/Linux (system default is used)."
         },
         "voiceScribe.recordingPrefix": {
           "type": "string",
