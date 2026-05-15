@@ -203,43 +203,29 @@ describe('ElevenLabsService', () => {
                 'expected min_silence_duration_ms=50 for high sensitivity');
         });
 
-        it('should not send any session_config message (realtime API does not support custom vocabulary)', async () => {
-            // The realtime Scribe v2 WebSocket API does not support custom
-            // vocabulary / keyterm boosting — that feature is batch-only.
-            // Configure both user vocabulary (via config) and additional
-            // vocabulary (via arg) and verify NO session_config is sent.
+        // NOTE: Custom vocabulary via session_config was removed because the
+        // realtime Scribe v2 WebSocket API does not support it — only the batch
+        // API does. The parameter is accepted but ignored. These tests verify
+        // that no session_config messages are sent (previously they asserted the
+        // opposite — that was the bug).
+
+        it('should not send session_config even when custom vocabulary is configured', async () => {
             mockVscode._configValues.set('customVocabulary', [
                 { word: 'useState', boost: 5.0 },
-                { word: 'kubectl', boost: 3.0 },
+                { word: 'kubectl', boost: 3.0, phonemes: ['ku\u02D0b k\u028Cdl'] },
             ]);
             const mod = proxyquire('../elevenLabsService', {
                 'vscode': mockVscode,
                 'ws': MockWebSocket,
             });
             const svc = new mod.ElevenLabsService('key');
-            const p = svc.startTranscription(
-                sinon.stub(), sinon.stub(),
-                [{ word: 'myFunc', boost: 2.0 }],
-            );
+            const p = svc.startTranscription(sinon.stub(), sinon.stub());
             const ws = wsInstances[wsInstances.length - 1];
             ws.emit('open');
             await p;
 
-            // Verify no session_config message was sent
-            const sessionConfigMessages = ws.sentMessages.filter((raw: string) => {
-                try {
-                    const parsed = JSON.parse(raw);
-                    return parsed.type === 'session_config';
-                } catch {
-                    return false;
-                }
-            });
-            assert.strictEqual(sessionConfigMessages.length, 0,
-                'expected no session_config messages (realtime API does not support custom vocabulary)');
-            // Only input_audio_chunk messages should ever be sent; at this
-            // point no audio has been sent, so sentMessages should be empty.
             assert.strictEqual(ws.sentMessages.length, 0,
-                'expected no messages sent on connect');
+                'realtime API does not support session_config for vocabulary');
         });
 
         it('should not send custom vocabulary when empty', async () => {
@@ -249,6 +235,15 @@ describe('ElevenLabsService', () => {
 
             assert.strictEqual(ws.sentMessages.length, 0,
                 'expected no messages sent when custom vocabulary is empty');
+        });
+
+        it('should not send session_config even with additional vocabulary param', async () => {
+            // customVocabulary not set — defaults to [] via config.get default
+            const { ws, promise } = startService();
+            await promise;
+
+            assert.strictEqual(ws.sentMessages.length, 0,
+                'realtime API ignores additionalVocabulary — no session_config sent');
         });
     });
 
