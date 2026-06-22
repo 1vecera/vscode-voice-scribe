@@ -1,5 +1,6 @@
 import WebSocket from 'ws';
 import * as vscode from 'vscode';
+import { TranscriptionProvider } from './transcriptionProvider';
 
 // ── Logging ─────────────────────────────────────────────────────────────────
 let outputChannel: vscode.OutputChannel | null = null;
@@ -18,7 +19,7 @@ export function showLog() {
 }
 
 // ── Service ─────────────────────────────────────────────────────────────────
-export class ElevenLabsService {
+export class ElevenLabsService implements TranscriptionProvider {
     private apiKey: string;
     private ws: WebSocket | null = null;
     private isTranscribing = false;

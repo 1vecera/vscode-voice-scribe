@@ -1,11 +1,12 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { ElevenLabsService } from './elevenLabsService';
+import { TranscriptionProvider } from './transcriptionProvider';
+import { PROVIDERS, getProvider, DEFAULT_PROVIDER } from './providerRegistry';
 import { AudioCapture } from './audioCapture';
 import { ClaudePolishService } from './claudePolish';
 import { generateKeyterms } from './claudeKeyterms';
 
-let elevenLabsService: ElevenLabsService | null = null;
+let transcriber: TranscriptionProvider | null = null;
 let audioCapture: AudioCapture | null = null;
 let claudePolish: ClaudePolishService | null = null;
 let isRecording = false;
@@ -174,6 +175,11 @@ export function activate(context: vscode.ExtensionContext) {
         () => selectLanguage()
     );
 
+    const selectProviderCommand = vscode.commands.registerCommand(
+        'voiceScribe.selectProvider',
+        () => selectProvider()
+    );
+
     const polishLastCommand = vscode.commands.registerCommand(
         'voiceScribe.polishLast',
         () => polishLast()
@@ -192,6 +198,7 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(toggleRecordingCommand);
     context.subscriptions.push(configureApiKeyCommand);
     context.subscriptions.push(selectLanguageCommand);
+    context.subscriptions.push(selectProviderCommand);
     context.subscriptions.push(polishLastCommand);
     context.subscriptions.push(setRecordingPrefixCommand);
     context.subscriptions.push(generateKeytermsCommand);
@@ -232,24 +239,21 @@ export function activate(context: vscode.ExtensionContext) {
 
 function initializeServices() {
     const config = vscode.workspace.getConfiguration('voiceScribe');
-    const apiKey = config.get<string>('apiKey');
+    const provider = getProvider(config.get<string>('provider', DEFAULT_PROVIDER));
 
-    if (apiKey) {
-        elevenLabsService = new ElevenLabsService(apiKey);
+    // Registry decides how to build the provider (and whether it's configured).
+    transcriber = provider.create(config);
 
-        // Initialize audio capture (no WebView needed)
+    if (transcriber) {
+        // Audio pipeline is provider-agnostic (16 kHz/16-bit/mono PCM, 100 ms chunks).
         audioCapture = new AudioCapture();
         audioCapture.initialize(async (chunk: Buffer) => {
-            // Send audio chunk to ElevenLabs
-            if (elevenLabsService) {
-                elevenLabsService.sendAudioChunk(chunk);
-            }
+            transcriber?.sendAudioChunk(chunk);
         }).catch((error) => {
             console.error('Failed to initialize audio capture:', error);
             // Error already shown to user in AudioCapture.initialize()
         });
     } else {
-        elevenLabsService = null;
         audioCapture = null;
     }
 }
@@ -260,13 +264,18 @@ async function startRecording() {
         return;
     }
 
-    if (!elevenLabsService || !audioCapture) {
+    if (!transcriber || !audioCapture) {
+        // Provider is selected but not yet set up (e.g. ElevenLabs without a key).
+        const config = vscode.workspace.getConfiguration('voiceScribe');
+        const provider = getProvider(config.get<string>('provider', DEFAULT_PROVIDER));
         const action = await vscode.window.showErrorMessage(
-            'Extension not initialized. Please configure API key first.',
-            'Configure'
+            `Voice Scribe (${provider.id}) is not set up. ${provider.setupHint}`,
+            'Configure', 'Select Provider'
         );
         if (action === 'Configure') {
             await configureApiKey();
+        } else if (action === 'Select Provider') {
+            await selectProvider();
         }
         return;
     }
@@ -300,8 +309,8 @@ async function startRecording() {
             }
         }
 
-        // Start ElevenLabs connection with two callbacks
-        await elevenLabsService.startTranscription(
+        // Start the provider connection with two callbacks
+        await transcriber.startTranscription(
             // ── onPartial ───────────────────────────────────────────
             // Each partial_transcript is the FULL rewritten hypothesis.
             // The model rewrites earlier words as context grows.
@@ -334,12 +343,12 @@ async function startRecording() {
         isRecording = false;
         stopIdleTimer();
         updateStatusBar();
-        // Best-effort cleanup of the ElevenLabs side. If the WebSocket opened
-        // but audio capture then failed, the service's `isTranscribing` flag
-        // would otherwise stay true until ElevenLabs' idle close (~15s), and
-        // the next attempt would throw "Already transcribing".
-        if (elevenLabsService) {
-            await elevenLabsService.stopTranscription().catch(() => { /* ignore */ });
+        // Best-effort cleanup of the provider side. If the session opened but
+        // audio capture then failed, the service's `isTranscribing` flag would
+        // otherwise stay true and the next attempt would throw "Already
+        // transcribing".
+        if (transcriber) {
+            await transcriber.stopTranscription().catch(() => { /* ignore */ });
         }
         await vscode.commands.executeCommand('setContext', 'voiceScribe.recording', false);
         vscode.window.showErrorMessage(`Failed to start recording: ${error}`);
@@ -347,7 +356,7 @@ async function startRecording() {
 }
 
 async function stopRecording() {
-    if (!isRecording || !elevenLabsService || !audioCapture) {
+    if (!isRecording || !transcriber || !audioCapture) {
         return;
     }
 
@@ -357,8 +366,8 @@ async function stopRecording() {
         // Stop audio capture first (stops sending chunks)
         await audioCapture.stopRecording();
 
-        // Stop ElevenLabs — waits for last VAD commit
-        await elevenLabsService.stopTranscription();
+        // Stop the provider — waits for the last committed segment to flush
+        await transcriber.stopTranscription();
         isRecording = false;
         updateStatusBar();
 
@@ -758,19 +767,40 @@ async function generateKeytermsCommandHandler() {
     );
 }
 
-async function configureApiKey() {
-    const apiKey = await vscode.window.showInputBox({
-        prompt: 'Enter your ElevenLabs API key',
-        password: true,
-        placeHolder: 'xi_xxxxxxxxxxxxxxxx'
-    });
+async function selectProvider() {
+    const config = vscode.workspace.getConfiguration('voiceScribe');
+    const current = config.get<string>('provider', DEFAULT_PROVIDER);
 
-    if (apiKey) {
-        const config = vscode.workspace.getConfiguration('voiceScribe');
-        await config.update('apiKey', apiKey, vscode.ConfigurationTarget.Global);
-        initializeServices();
-        vscode.window.showInformationMessage('✅ API key saved');
-    }
+    const items = PROVIDERS.map(p => ({
+        label: p.label,
+        description: p.id === current ? '(current)' : p.detail,
+        value: p.id,
+    }));
+
+    const picked = await vscode.window.showQuickPick(items, {
+        placeHolder: `Select transcription provider (current: ${current})`,
+    });
+    if (!picked) { return; }
+
+    await config.update('provider', picked.value, vscode.ConfigurationTarget.Global);
+    initializeServices();
+
+    const provider = getProvider(picked.value);
+    const ready = provider.create(config) !== null;
+    vscode.window.showInformationMessage(
+        ready
+            ? `Voice Scribe: provider set to ${provider.id}.`
+            : `Voice Scribe: provider set to ${provider.id}. ${provider.setupHint}`
+    );
+}
+
+// Configures the *active* provider's credentials (ElevenLabs key prompt,
+// Google ADC info, …). The command keeps its historical id for compatibility.
+async function configureApiKey() {
+    const config = vscode.workspace.getConfiguration('voiceScribe');
+    const provider = getProvider(config.get<string>('provider', DEFAULT_PROVIDER));
+    await provider.configure(config);
+    initializeServices();
 }
 
 function updateStatusBar() {
@@ -793,8 +823,8 @@ function updateStatusBar() {
 
 export function deactivate() {
     stopIdleTimer();
-    if (elevenLabsService) {
-        elevenLabsService.dispose();
+    if (transcriber) {
+        transcriber.dispose();
     }
     if (audioCapture) {
         audioCapture.dispose();

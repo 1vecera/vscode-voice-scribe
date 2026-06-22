@@ -159,7 +159,7 @@ async function gatherWorkspaceContext(): Promise<string> {
     // Currently open text documents (visible + tabs)
     const seen = new Set<string>(parts.map(() => '')); // placeholder dedupe
     const docs = vscode.workspace.textDocuments;
-    let perFileBudget = 2000;
+    const perFileBudget = 2000;
     let totalBudget = 20_000;
 
     for (const doc of docs) {

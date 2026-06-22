@@ -10,6 +10,7 @@ describe('Extension', () => {
     let mockVscode: any;
     let registeredCommands: Record<string, (...args: any[]) => any>;
     let mockElevenLabsInstance: any;
+    let mockGoogleInstance: any;
     let mockAudioCaptureInstance: any;
     let ext: any;
     let mockContext: any;
@@ -44,7 +45,16 @@ describe('Extension', () => {
             dispose: sinon.stub(),
         };
 
+        mockGoogleInstance = {
+            startTranscription: sinon.stub().resolves(),
+            stopTranscription: sinon.stub().resolves('final text'),
+            sendAudioChunk: sinon.stub(),
+            getFullTranscript: sinon.stub().returns(''),
+            dispose: sinon.stub(),
+        };
+
         const MockElevenLabsService = sinon.stub().returns(mockElevenLabsInstance);
+        const MockGoogleSpeechService = sinon.stub().returns(mockGoogleInstance);
         const MockAudioCapture = sinon.stub().returns(mockAudioCaptureInstance);
 
         mockClaudePolishInstance = {
@@ -54,9 +64,16 @@ describe('Extension', () => {
         };
         const MockClaudePolishService = sinon.stub().returns(mockClaudePolishInstance);
 
+        // extension.ts talks to providers only through ./providerRegistry, which
+        // transitively requires the concrete services + vscode. Mark those stubs
+        // @global so proxyquire applies them to the registry's requires too —
+        // this exercises the real registry wiring with mocked services.
+        mockVscode['@global'] = true;
+
         ext = proxyquire('../extension', {
             'vscode': mockVscode,
-            './elevenLabsService': { ElevenLabsService: MockElevenLabsService },
+            './elevenLabsService': { ElevenLabsService: MockElevenLabsService, '@global': true },
+            './googleSpeechService': { GoogleSpeechService: MockGoogleSpeechService, '@global': true },
             './audioCapture': { AudioCapture: MockAudioCapture },
             './claudePolish': { ClaudePolishService: MockClaudePolishService },
             './claudeKeyterms': {
@@ -80,9 +97,9 @@ describe('Extension', () => {
     // ── activate ───────────────────────────────────────────────────────
 
     describe('activate', () => {
-        it('should register 6 commands', () => {
+        it('should register 7 commands', () => {
             ext.activate(mockContext);
-            assert.strictEqual(mockVscode.commands.registerCommand.callCount, 6);
+            assert.strictEqual(mockVscode.commands.registerCommand.callCount, 7);
         });
 
         it('should register voiceScribe.toggleRecording command', () => {
@@ -187,7 +204,7 @@ describe('Extension', () => {
 
             sinon.assert.calledOnce(mockVscode.window.showErrorMessage);
             const msg = mockVscode.window.showErrorMessage.firstCall.args[0];
-            assert.ok(msg.includes('not initialized'));
+            assert.ok(msg.includes('not set up'));
         });
 
         it('should offer Configure action when not initialized', async () => {
@@ -365,7 +382,7 @@ describe('Extension', () => {
 
             sinon.assert.calledWith(
                 mockVscode.window.showInformationMessage,
-                '✅ API key saved',
+                '✅ ElevenLabs API key saved',
             );
         });
 
@@ -1012,6 +1029,46 @@ describe('Extension', () => {
                 mockVscode.window.showInformationMessage,
                 'Voice Scribe: nothing to polish yet',
             );
+        });
+    });
+
+    // ── provider selection ────────────────────────────────────────────
+
+    describe('provider selection', () => {
+        it('uses ElevenLabs by default (with an API key)', async () => {
+            mockVscode._configValues.set('apiKey', 'test-key');
+            ext.activate(mockContext);
+            await registeredCommands['voiceScribe.toggleRecording']();
+            sinon.assert.calledOnce(mockElevenLabsInstance.startTranscription);
+            sinon.assert.notCalled(mockGoogleInstance.startTranscription);
+        });
+
+        it('uses Google (no API key required) when provider=google', async () => {
+            mockVscode._configValues.set('provider', 'google');
+            ext.activate(mockContext);   // note: no apiKey set
+            await registeredCommands['voiceScribe.toggleRecording']();
+            sinon.assert.calledOnce(mockGoogleInstance.startTranscription);
+            sinon.assert.notCalled(mockElevenLabsInstance.startTranscription);
+            sinon.assert.calledOnce(mockAudioCaptureInstance.startRecording);
+        });
+
+        it('selectProvider writes the chosen provider to settings', async () => {
+            ext.activate(mockContext);
+            mockVscode.window.showQuickPick = sinon.stub().resolves({ value: 'google' });
+            await registeredCommands['voiceScribe.selectProvider']();
+            sinon.assert.calledWith(
+                mockVscode._config.update,
+                'provider',
+                'google',
+                mockVscode.ConfigurationTarget.Global,
+            );
+        });
+
+        it('configureApiKey is a no-op prompt under the Google provider', async () => {
+            mockVscode._configValues.set('provider', 'google');
+            ext.activate(mockContext);
+            await registeredCommands['voiceScribe.configureApiKey']();
+            sinon.assert.notCalled(mockVscode.window.showInputBox);
         });
     });
 });

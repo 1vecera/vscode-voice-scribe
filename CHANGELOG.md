@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0
+
+- **Google Cloud transcription provider (Chirp 3)** — Voice Scribe now supports two speech-to-text engines, selectable one at a time:
+  - **ElevenLabs** Scribe v2 Realtime (API key), or
+  - **Google Cloud** Speech-to-Text V2 streaming with the **Chirp 3** model (gcloud Application Default Credentials — **no API key**).
+- New command **Voice Scribe: Select Provider** to switch engines; `voiceScribe.provider` setting (`elevenlabs` | `google`).
+- New Google settings: `voiceScribe.googleProject` (auto-detected from ADC when empty), `voiceScribe.googleLocation` (default `eu`), `voiceScribe.googleModel` (default `chirp_3`).
+- Google path streams the same 16 kHz PCM over gRPC `StreamingRecognize` to a regional endpoint, maps interim→live-rewrite and final→commit (identical editor UX), maps the language picker to BCP-47 (`cs` → `cs-CZ`, etc.), and transparently reopens the stream on the V2 duration cap so long dictations don't drop.
+- Internals: providers sit behind a `TranscriptionProvider` interface and a data-driven **provider registry** (`src/providerRegistry.ts`). Adding a provider is one descriptor entry plus a package.json enum value — init, the picker, credential setup, and the not-set-up guard all read from the registry, no per-provider branching. `@google-cloud/speech` is bundled into the extension (no extra runtime install).
+
 ## 0.4.2
 
 - Keyterms now save to **workspace** settings (`.vscode/settings.json`) by default — each project keeps its own list. Falls back to global when no workspace is open.
