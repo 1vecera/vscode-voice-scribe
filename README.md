@@ -1,11 +1,12 @@
 # Voice Scribe
 
-> Real-time voice-to-text for VS Code powered by [ElevenLabs Scribe v2](https://elevenlabs.io) — ranked #1 for speech-to-text accuracy. Speak and watch your words appear, rewrite, and refine in real time across 34 languages.
+> Real-time voice-to-text for VS Code. Choose your transcription engine — [ElevenLabs Scribe v2](https://elevenlabs.io) (API key) or [Google Cloud Chirp 3](https://cloud.google.com/speech-to-text) (gcloud ADC, no key) — and watch your words appear, rewrite, and refine in real time across 34 languages.
 
 ## Features
 
 ### Core
 
+- **Two transcription providers** — switch between **ElevenLabs Scribe v2** (API key) and **Google Cloud Chirp 3** (gcloud Application Default Credentials, no key) with one command. Same live-rewrite editor experience either way. See [Providers](#providers).
 - **Live rewriting** — partial transcripts replace the "live zone" (dotted underline) in your editor as the model refines its hypothesis; text corrects itself as you speak
 - **Toggle recording** — `Cmd+Alt+V` / `Ctrl+Alt+V` starts and stops with one shortcut
 - **VAD auto-commit** — voice activity detection automatically commits text when you pause speaking
@@ -35,7 +36,9 @@
 
 - **VS Code** 1.85+
 - **ffmpeg** installed and on PATH
-- **ElevenLabs API key** with Scribe v2 access — [elevenlabs.io](https://elevenlabs.io)
+- **One transcription provider**, either:
+  - **ElevenLabs** — an API key with Scribe v2 access ([elevenlabs.io](https://elevenlabs.io)), or
+  - **Google Cloud** — the [gcloud CLI](https://cloud.google.com/sdk) with Application Default Credentials (`gcloud auth application-default login`) and the Speech-to-Text API enabled on your project. No API key.
 
 ```bash
 # macOS
@@ -46,6 +49,9 @@ sudo apt install ffmpeg
 
 # Windows
 choco install ffmpeg
+
+# Google provider only — one-time auth (no API key needed)
+gcloud auth application-default login
 ```
 
 ## Installation
@@ -106,14 +112,39 @@ Prefix commands insert annotation tags:
 | "fix me missing null check" | `FIXME: missing null check` |
 | "note this needs refactoring" | `NOTE: this needs refactoring` |
 
+## Providers
+
+Voice Scribe can transcribe with either ElevenLabs or Google Cloud — one active at a time. Switch with the command palette: `Cmd+Shift+P` → *Voice Scribe: Select Provider*, or set `voiceScribe.provider`.
+
+| | ElevenLabs (default) | Google Cloud |
+|---|---|---|
+| Model | Scribe v2 Realtime | Chirp 3 (V2 streaming) |
+| Auth | API key (`voiceScribe.apiKey`) | gcloud Application Default Credentials — **no API key** |
+| Setup | *Voice Scribe: Configure API Key* | `gcloud auth application-default login` |
+| Transport | WebSocket (`wss://`) | gRPC streaming to a regional endpoint |
+| Keyterm biasing | ✅ (see [Custom Vocabulary](#custom-vocabulary)) | — (uses Chirp 3's built-in multilingual model) |
+
+**Google setup (one time):**
+
+1. `gcloud auth application-default login`
+2. Ensure the Speech-to-Text API is enabled on your project (`gcloud services enable speech.googleapis.com`).
+3. *Voice Scribe: Select Provider* → **Google Cloud**.
+4. (Optional) Set `voiceScribe.googleProject` if ADC doesn't resolve your project, and `voiceScribe.googleLocation` (default `eu`) to a region that serves Chirp 3.
+
+Chirp 3 handles Czech/English code-switching well in `"auto"` language mode.
+
 ## Configuration
 
 All settings are under `voiceScribe.*` in your VS Code settings.
 
 | Setting | Default | Description |
 |---|---|---|
-| `apiKey` | `""` | Your ElevenLabs API key |
-| `language` | `"auto"` | Language for recognition ([ISO 639-1 code](#supported-languages)). `"auto"` lets the API detect your language. |
+| `provider` | `"elevenlabs"` | Transcription engine: `"elevenlabs"` or `"google"`. Switch with *Voice Scribe: Select Provider*. |
+| `apiKey` | `""` | Your ElevenLabs API key (provider `elevenlabs` only) |
+| `googleProject` | `""` | GCP project ID (provider `google`). Empty = auto-detect from ADC. |
+| `googleLocation` | `"eu"` | GCP region for Chirp streaming, e.g. `eu`, `us`, `europe-west4`. Must support the model. |
+| `googleModel` | `"chirp_3"` | Google Speech-to-Text V2 model: `chirp_3` (recommended) or `chirp_2`. |
+| `language` | `"auto"` | Language for recognition ([ISO 639-1 code](#supported-languages)). `"auto"` lets the engine detect your language (best for code-switching, e.g. Czech ↔ English). |
 | `insertMode` | `"smart"` | `"plain"` = as-is, `"comment"` = always wrap in line comment, `"smart"` = auto-comment in code, plain in prose |
 | `removeFiller` | `true` | Strip filler words (um, uh, hmm, mhm) from transcriptions |
 | `enableVoiceCommands` | `true` | Execute voice commands instead of typing them |
@@ -167,19 +198,21 @@ Set `voiceScribe.language` to any of these ISO 639-1 codes, or `"auto"` to let t
 ## How It Works
 
 ```
-Microphone → ffmpeg → 100ms PCM chunks → WebSocket → ElevenLabs Scribe v2 API
-                                                          ↓
-Editor ← handleCommitted() ← committed_transcript   ← VAD silence detection
-Editor ← handlePartial()   ← partial_transcript     ← interim hypothesis
+Microphone → ffmpeg → 100ms PCM chunks → TranscriptionProvider → ElevenLabs (wss) / Google (gRPC)
+                                                       ↓
+Editor ← handleCommitted() ← onFinal   (committed)  ← interim/final results
+Editor ← handlePartial()   ← onPartial (interim)
 ```
 
 1. **ffmpeg** captures microphone audio as 16 kHz / 16-bit / mono PCM with noise reduction filters
-2. Audio is buffered into exactly 3200-byte chunks (100ms) and base64-encoded
-3. Chunks are sent over an encrypted WebSocket (`wss://`) to the ElevenLabs Scribe v2 realtime API
-4. `partial_transcript` messages replace the live zone — the model rewrites earlier words as context grows
-5. `committed_transcript` messages lock text in place, apply comment wrapping if needed, and advance the cursor
+2. Audio is buffered into exactly 3200-byte chunks (100 ms)
+3. A `TranscriptionProvider` streams those chunks to the selected engine:
+   - **ElevenLabs** — base64 over an encrypted WebSocket (`wss://`) to the Scribe v2 realtime API
+   - **Google** — `{ audio }` frames over gRPC `StreamingRecognize` to a regional Chirp 3 endpoint (auth via ADC)
+4. Interim results (`onPartial`) replace the live zone — the model rewrites earlier words as context grows
+5. Final/committed results (`onFinal`) lock text in place, apply comment wrapping if needed, and advance the cursor
 6. An edit queue serializes all editor mutations to prevent race conditions
-7. On stop, a 2-second drain window catches any final VAD commits before closing the WebSocket
+7. On stop, a short drain window catches the last committed segment before closing the stream. The Google provider also transparently reopens its stream if it hits the V2 streaming duration cap mid-dictation.
 
 ## Security & Privacy
 
@@ -187,15 +220,15 @@ Voice Scribe handles microphone audio and sends it to an external API. We take t
 
 | Concern | How it's handled |
 |---|---|
-| **Audio transmission** | All audio is streamed over encrypted WebSocket (`wss://`) to ElevenLabs. No unencrypted connections. |
+| **Audio transmission** | Audio is streamed over an encrypted connection — WebSocket (`wss://`) to ElevenLabs, or TLS gRPC to Google Cloud. No unencrypted connections. |
 | **No local audio storage** | Audio is streamed in real time and never written to disk. Chunks exist only in memory during recording. |
 | **No transcript logging** | Transcript content is never logged to the Output Channel or console. Only message types and character counts appear in logs. |
-| **API key storage** | Stored in VS Code's global settings (plaintext `settings.json`). The input prompt masks the key in the UI. |
+| **Credentials** | ElevenLabs: API key in VS Code global settings (`settings.json`); the input prompt masks it. Google: no key — uses your local gcloud Application Default Credentials, which never leave your machine via the extension. |
 | **Memory cleanup** | Transcript data is cleared from memory when recording stops and when the extension is deactivated. |
 | **No telemetry** | The extension collects no analytics, telemetry, or usage data. |
 | **Minimal permissions** | Only requires microphone access (via ffmpeg) and network access (to ElevenLabs API). |
 
-**Third-party data processing**: Audio is processed by [ElevenLabs](https://elevenlabs.io) under their [privacy policy](https://elevenlabs.io/privacy). Review their data retention and processing terms if you dictate sensitive information.
+**Third-party data processing**: Audio is processed by your chosen provider — [ElevenLabs](https://elevenlabs.io) ([privacy policy](https://elevenlabs.io/privacy)) or [Google Cloud](https://cloud.google.com/speech-to-text) ([data usage](https://cloud.google.com/speech-to-text/docs/data-usage)). Review their data retention and processing terms if you dictate sensitive information.
 
 ## Development
 

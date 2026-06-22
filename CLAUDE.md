@@ -44,13 +44,19 @@ Editor ← handleCommitted() ← committed_transcript    ←──── VAD sil
 Editor ← handlePartial()   ← partial_transcript      ←──── interim hypothesis
 ```
 
-### Three Source Modules
+### Source Modules
 
-- **extension.ts** — Entry point. Registers commands, manages recording state, and handles editor mutations. Partial transcripts replace a "live zone" (dotted underline decoration) that gets locked in on commit. All editor edits are serialized through an `editQueue` promise chain to prevent race conditions.
+- **extension.ts** — Entry point. Registers commands, manages recording state, and handles editor mutations. Talks to a provider only through the `TranscriptionProvider` interface (`transcriber` variable) — never a concrete service. Partial transcripts replace a "live zone" (dotted underline decoration) that gets locked in on commit. All editor edits are serialized through an `editQueue` promise chain to prevent race conditions.
+
+- **transcriptionProvider.ts** — The provider contract (`startTranscription(onPartial,onFinal)`, `sendAudioChunk`, `stopTranscription`, `getFullTranscript`, `dispose`). Every backend implements it.
+
+- **providerRegistry.ts** — Data-driven registry of providers. Each `ProviderDescriptor` carries `{id, label, detail, create(config), configure(config), setupHint}`. `extension.ts` reads it for init, the provider picker, credential setup, and the not-set-up guard — **no per-provider branching anywhere**. **To add a provider:** implement `TranscriptionProvider` in `src/<name>Service.ts`, append one descriptor to `PROVIDERS`, and add the id (+ any `voiceScribe.<name>*` settings) to package.json.
 
 - **elevenLabsService.ts** — WebSocket client for the ElevenLabs realtime STT API. Sends base64-encoded audio chunks, receives partial/committed transcript messages. On stop, waits 2 seconds for final VAD commits before closing.
 
-- **audioCapture.ts** — Spawns ffmpeg with platform-specific input (`avfoundation` on macOS, `alsa` on Linux, `dshow` on Windows). Outputs 16kHz/16-bit/mono PCM. Buffers stdout into exactly 3200-byte chunks (100ms of audio).
+- **googleSpeechService.ts** — Google Cloud Speech-to-Text V2 streaming (Chirp 3) over gRPC `_streamingRecognize`. Auth via ADC (no API key), regional endpoint `<location>-speech.googleapis.com`, config-first write then `{audio}` frames, interim→onPartial / final→onFinal. Reopens the stream on the V2 duration cap. Maps the ISO 639-1 language picker to BCP-47.
+
+- **audioCapture.ts** — Spawns ffmpeg with platform-specific input (`avfoundation` on macOS, `alsa` on Linux, `dshow` on Windows). Outputs 16kHz/16-bit/mono PCM. Buffers stdout into exactly 3200-byte chunks (100ms of audio). Provider-agnostic — feeds whichever provider is active.
 
 ### Key State in extension.ts
 
@@ -60,14 +66,14 @@ Editor ← handlePartial()   ← partial_transcript      ←──── interim
 
 ### Extension Manifest
 
-Commands: `voiceScribe.startRecording`, `stopRecording`, `configureApiKey`, `selectLanguage`
+Commands: `voiceScribe.toggleRecording`, `configureApiKey`, `selectLanguage`, `selectProvider`, `polishLast`, `setRecordingPrefix`, `generateKeyterms`
 Keybinding: `Cmd+Alt+V` / `Ctrl+Alt+V` toggles recording
-Configuration: `voiceScribe.apiKey` (string), `voiceScribe.language` (ISO 639-1 code, default "auto")
+Configuration: `voiceScribe.provider` (`elevenlabs`|`google`), `voiceScribe.apiKey` (ElevenLabs), `voiceScribe.google{Project,Location,Model}` (Google), `voiceScribe.language` (ISO 639-1 code, default "auto")
 
 ### Testing
 
-Mocha + Sinon with proxyquire for dependency injection. Mock factories for vscode API, ChildProcess, and WebSocket are in `src/test/helpers.ts`. Three test suites cover extension commands/state, WebSocket protocol, and platform-specific ffmpeg spawning.
+Mocha + Sinon with proxyquire for dependency injection. Mock factories for vscode API and ChildProcess are in `src/test/helpers.ts`; WebSocket and the Google duplex stream are mocked inline per-suite. Suites cover extension commands/state + provider selection, the ElevenLabs WebSocket protocol, the Google streaming protocol, and platform-specific ffmpeg spawning.
 
-### Runtime Dependency
+### Runtime Dependencies
 
-Single runtime dep: `ws` for WebSocket. Audio capture uses system ffmpeg (must be installed).
+`ws` (ElevenLabs WebSocket) and `@google-cloud/speech` (Google Chirp 3, bundled into `out/extension.js` by esbuild). Audio capture uses system ffmpeg (must be installed). The Google provider needs gcloud Application Default Credentials.
