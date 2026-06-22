@@ -89,8 +89,23 @@ export class GoogleSpeechService implements TranscriptionProvider {
         log(`Provider: Google ${this.model} @ ${apiEndpoint} | languages: ${this.languageCodes.join(',')}`);
 
         this.client = new v2.SpeechClient({ apiEndpoint });
-        // Auto-detect the project from ADC when not pinned in settings.
-        const projectId = this.project || (await this.client.getProjectId());
+        // Pinned project wins; otherwise auto-detect from gcloud config / env /
+        // ADC. Auto-detect fails when none of those is set, so turn the gax
+        // "Unable to detect a Project Id" error into actionable guidance.
+        let projectId = this.project;
+        if (!projectId) {
+            try {
+                projectId = await this.client.getProjectId();
+            } catch {
+                /* handled below */
+            }
+        }
+        if (!projectId) {
+            throw new Error(
+                'No Google Cloud project found. Set "voiceScribe.googleProject" in settings, ' +
+                'or run `gcloud config set project <PROJECT_ID>`, or export GOOGLE_CLOUD_PROJECT.',
+            );
+        }
         this.recognizer = `projects/${projectId}/locations/${this.location}/recognizers/_`;
         log(`Recognizer: ${this.recognizer}`);
 

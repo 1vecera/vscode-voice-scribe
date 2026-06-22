@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1
+
+- Google provider: when no project can be resolved (empty `voiceScribe.googleProject`, no `gcloud config` project, no `GOOGLE_CLOUD_PROJECT`), fail with actionable guidance instead of a cryptic `Unable to detect a Project Id` error. Set `voiceScribe.googleProject`, run `gcloud config set project <id>`, or export `GOOGLE_CLOUD_PROJECT`.
+
 ## 0.5.0
 
 - **Google Cloud transcription provider (Chirp 3)** — Voice Scribe now supports two speech-to-text engines, selectable one at a time:

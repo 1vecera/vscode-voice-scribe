@@ -117,6 +117,15 @@ describe('GoogleSpeechService', () => {
             sinon.assert.notCalled(spy);
         });
 
+        it('throws an actionable error when no project can be resolved', async () => {
+            sinon.stub(MockSpeechClient.prototype, 'getProjectId').rejects(new Error('Unable to detect a Project Id'));
+            const svc = make();   // no project pinned
+            await assert.rejects(
+                svc.startTranscription(sinon.stub(), sinon.stub()),
+                /voiceScribe\.googleProject|gcloud config set project|GOOGLE_CLOUD_PROJECT/,
+            );
+        });
+
         it('throws if already transcribing', async () => {
             const svc = make();
             await svc.startTranscription(sinon.stub(), sinon.stub());
