@@ -32,6 +32,14 @@ export interface ProviderDescriptor {
     configure(config: vscode.WorkspaceConfiguration): Promise<void>;
     /** One-line hint shown when the provider is selected but `create()` returns null. */
     setupHint: string;
+    /**
+     * Whether this backend actually consumes `additionalVocabulary`.
+     *
+     * Gathering it runs a DocumentSymbolProvider, which can block on a cold
+     * language server — so it must not be collected on the recording-start path
+     * for a provider that would discard it.
+     */
+    usesVocabulary: boolean;
 }
 
 export const DEFAULT_PROVIDER = 'elevenlabs';
@@ -57,17 +65,18 @@ export const PROVIDERS: ProviderDescriptor[] = [
             }
         },
         setupHint: 'Run "Voice Scribe: Configure API Key" to add your ElevenLabs key.',
+        usesVocabulary: true,
     },
     {
         id: 'google',
-        label: '$(cloud) Google Cloud — Chirp 3 streaming',
+        label: '$(cloud) Google Cloud — Speech-to-Text V2 streaming',
         detail: 'uses gcloud ADC · no API key',
         // Google uses Application Default Credentials; nothing to gate on at
         // construction time, so this always returns a service.
         create: (config) => new GoogleSpeechService({
             project: config.get<string>('googleProject') || undefined,
             location: config.get<string>('googleLocation', 'eu'),
-            model: config.get<string>('googleModel', 'chirp_3'),
+            model: config.get<string>('googleModel', 'long'),
         }),
         configure: async () => {
             vscode.window.showInformationMessage(
@@ -76,6 +85,9 @@ export const PROVIDERS: ProviderDescriptor[] = [
             );
         },
         setupHint: 'Run "gcloud auth application-default login" to authenticate.',
+        // Speech-to-Text V2 streaming has no realtime biasing hook, so the
+        // service ignores the vocabulary argument entirely.
+        usesVocabulary: false,
     },
 ];
 

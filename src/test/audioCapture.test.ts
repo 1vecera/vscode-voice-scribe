@@ -17,10 +17,7 @@ describe('AudioCapture', () => {
         const mod = proxyquire('../audioCapture', {
             'vscode': mockVscode,
             'child_process': { spawn: mockSpawn, execSync: () => '' },
-            'fs': { existsSync: () => false, mkdirSync: sinon.stub(), createWriteStream: sinon.stub() },
-            'os': { homedir: () => '/mock/home' },
-            'path': { join: (...args: string[]) => args.join('/') },
-            'https': { get: sinon.stub() },
+            'fs': { existsSync: () => false },
         });
         AudioCaptureClass = mod.AudioCapture;
     });
@@ -101,7 +98,7 @@ describe('AudioCapture', () => {
             assert.ok(args.includes('pipe:1'),'expected stdout pipe');
         });
 
-        it('should include audio filter for non-speech noise rejection', async () => {
+        it('should send raw microphone audio without filters', async () => {
             const initProc = createMockChildProcess();
             const recordProc = createMockChildProcess();
             mockSpawn.onFirstCall().returns(initProc);
@@ -115,13 +112,8 @@ describe('AudioCapture', () => {
             await ac.startRecording();
 
             const args: string[] = mockSpawn.secondCall.args[1];
-            const afIndex = args.indexOf('-af');
-            assert.ok(afIndex !== -1, 'expected -af flag in ffmpeg args');
-            assert.strictEqual(
-                args[afIndex + 1],
-                'highpass=f=200,lowpass=f=3000,afftdn=nr=15:nf=-30',
-                'expected highpass/lowpass/denoise filter chain',
-            );
+            assert.strictEqual(args.indexOf('-af'), -1,
+                'expected raw microphone audio without an -af filter');
         });
 
         it(`should use platform-specific input format (${process.platform})`, async () => {
@@ -150,7 +142,7 @@ describe('AudioCapture', () => {
             }
         });
 
-        it('should chunk audio data at 3200-byte boundaries', async () => {
+        it('should chunk audio data at the default 640-byte (20ms) boundaries', async () => {
             const initProc = createMockChildProcess();
             const recordProc = createMockChildProcess();
             mockSpawn.onFirstCall().returns(initProc);
@@ -164,11 +156,11 @@ describe('AudioCapture', () => {
 
             await ac.startRecording();
 
-            // Emit 6400 bytes → expect 2 chunks of 3200
-            recordProc.stdout.emit('data', Buffer.alloc(6400, 0x42));
+            // Emit 1280 bytes → expect 2 chunks of 640 (20ms each at 16kHz/16bit/mono)
+            recordProc.stdout.emit('data', Buffer.alloc(1280, 0x42));
             assert.strictEqual(chunks.length, 2);
-            assert.strictEqual(chunks[0].length, 3200);
-            assert.strictEqual(chunks[1].length, 3200);
+            assert.strictEqual(chunks[0].length, 640);
+            assert.strictEqual(chunks[1].length, 640);
         });
 
         it('should buffer data smaller than chunk size', async () => {
@@ -185,14 +177,14 @@ describe('AudioCapture', () => {
 
             await ac.startRecording();
 
-            // Emit 1000 bytes — not enough for a full 3200-byte chunk
-            recordProc.stdout.emit('data', Buffer.alloc(1000));
+            // Emit 200 bytes — not enough for a full 640-byte chunk
+            recordProc.stdout.emit('data', Buffer.alloc(200));
             assert.strictEqual(chunks.length, 0);
 
-            // Emit 2200 more → total 3200 → one chunk
-            recordProc.stdout.emit('data', Buffer.alloc(2200));
+            // Emit 440 more → total 640 → one chunk
+            recordProc.stdout.emit('data', Buffer.alloc(440));
             assert.strictEqual(chunks.length, 1);
-            assert.strictEqual(chunks[0].length, 3200);
+            assert.strictEqual(chunks[0].length, 640);
         });
 
         it('should send remaining buffer when process closes', async () => {
@@ -209,92 +201,16 @@ describe('AudioCapture', () => {
 
             await ac.startRecording();
 
-            // Emit 1500 bytes — smaller than chunkSize
-            recordProc.stdout.emit('data', Buffer.alloc(1500));
+            // Emit 300 bytes — smaller than the 640-byte chunkSize
+            recordProc.stdout.emit('data', Buffer.alloc(300));
             assert.strictEqual(chunks.length, 0);
 
             // Process closes — remaining buffer flushed
             recordProc.emit('close', 0);
             assert.strictEqual(chunks.length, 1);
-            assert.strictEqual(chunks[0].length, 1500);
+            assert.strictEqual(chunks[0].length, 300);
         });
 
-        it('should omit -af flag when noiseReduction is off', async () => {
-            mockVscode._configValues.set('noiseReduction', 'off');
-
-            const initProc = createMockChildProcess();
-            const recordProc = createMockChildProcess();
-            mockSpawn.onFirstCall().returns(initProc);
-            mockSpawn.onSecondCall().returns(recordProc);
-
-            const ac = new AudioCaptureClass();
-            const initPromise = ac.initialize(sinon.stub());
-            initProc.emit('close', 0);
-            await initPromise;
-
-            await ac.startRecording();
-
-            const args: string[] = mockSpawn.secondCall.args[1];
-            assert.strictEqual(args.indexOf('-af'), -1,
-                'expected no -af flag when noiseReduction is off');
-        });
-
-        it('should use basic filter when noiseReduction is basic', async () => {
-            mockVscode._configValues.set('noiseReduction', 'basic');
-
-            const initProc = createMockChildProcess();
-            const recordProc = createMockChildProcess();
-            mockSpawn.onFirstCall().returns(initProc);
-            mockSpawn.onSecondCall().returns(recordProc);
-
-            const ac = new AudioCaptureClass();
-            const initPromise = ac.initialize(sinon.stub());
-            initProc.emit('close', 0);
-            await initPromise;
-
-            await ac.startRecording();
-
-            const args: string[] = mockSpawn.secondCall.args[1];
-            const afIndex = args.indexOf('-af');
-            assert.ok(afIndex !== -1, 'expected -af flag for basic noise reduction');
-            assert.strictEqual(
-                args[afIndex + 1],
-                'highpass=f=200,lowpass=f=3000,afftdn=nr=15:nf=-30',
-                'expected basic filter chain',
-            );
-        });
-
-        it('should fall back to basic filter when neural model is not available', async () => {
-            mockVscode._configValues.set('noiseReduction', 'neural');
-
-            const initProc = createMockChildProcess();
-            const recordProc = createMockChildProcess();
-            mockSpawn.onFirstCall().returns(initProc);
-            mockSpawn.onSecondCall().returns(recordProc);
-
-            const ac = new AudioCaptureClass();
-            const initPromise = ac.initialize(sinon.stub());
-            initProc.emit('close', 0);
-            await initPromise;
-
-            // Stub ensureRnnoiseModel to resolve to null (model not found)
-            sinon.stub(ac, 'ensureRnnoiseModel').resolves(null);
-
-            await ac.startRecording();
-
-            const args: string[] = mockSpawn.secondCall.args[1];
-            const afIndex = args.indexOf('-af');
-            assert.ok(afIndex !== -1, 'expected -af flag for neural fallback');
-            assert.strictEqual(
-                args[afIndex + 1],
-                'highpass=f=200,lowpass=f=3000,afftdn=nr=15:nf=-30',
-                'expected fallback to basic filter chain when neural model unavailable',
-            );
-            sinon.assert.calledOnce(mockVscode.window.showWarningMessage);
-            const warnMsg = mockVscode.window.showWarningMessage.firstCall.args[0];
-            assert.ok(warnMsg.includes('RNNoise model not available'),
-                `expected warning about RNNoise model, got: ${warnMsg}`);
-        });
     });
 
     // ── stopRecording ──────────────────────────────────────────────────

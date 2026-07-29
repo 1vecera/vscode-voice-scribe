@@ -1,12 +1,12 @@
 # Voice Scribe
 
-> Real-time voice-to-text for VS Code. Choose your transcription engine — [ElevenLabs Scribe v2](https://elevenlabs.io) (API key) or [Google Cloud Chirp 3](https://cloud.google.com/speech-to-text) (gcloud ADC, no key) — and watch your words appear, rewrite, and refine in real time across 34 languages.
+> Real-time voice-to-text for VS Code. Choose your transcription engine — [ElevenLabs Scribe v2](https://elevenlabs.io) (API key) or [Google Cloud Speech-to-Text V2](https://cloud.google.com/speech-to-text) (gcloud ADC, no key) — and watch your words appear, rewrite, and refine in real time across 34 languages.
 
 ## Features
 
 ### Core
 
-- **Two transcription providers** — switch between **ElevenLabs Scribe v2** (API key) and **Google Cloud Chirp 3** (gcloud Application Default Credentials, no key) with one command. Same live-rewrite editor experience either way. See [Providers](#providers).
+- **Two transcription providers** — switch between **ElevenLabs Scribe v2** (API key) and **Google Cloud Speech-to-Text V2** (gcloud Application Default Credentials, no key) with one command. Same live-rewrite editor experience either way. See [Providers](#providers).
 - **Live rewriting** — partial transcripts replace the "live zone" (dotted underline) in your editor as the model refines its hypothesis; text corrects itself as you speak
 - **Toggle recording** — `Cmd+Alt+V` / `Ctrl+Alt+V` starts and stops with one shortcut
 - **VAD auto-commit** — voice activity detection automatically commits text when you pause speaking
@@ -21,9 +21,8 @@
 - **Prefix commands** — say "todo fix the login bug" and it inserts `TODO: fix the login bug`. Also supports `FIXME`, `NOTE`, `HACK`.
 - **Terminal target** — send transcriptions directly to the integrated terminal instead of the editor
 
-### Audio Quality
+### Audio
 
-- **Neural noise reduction** — RNNoise neural denoiser on top of highpass/lowpass/FFT filters. Downloads a small model on first use. Three levels: `off`, `basic`, `neural` (default).
 - **VAD sensitivity presets** — `low` (noisy office/cafe), `medium` (normal room), `high` (quiet room/headset). Controls how aggressively non-speech audio is rejected.
 - **Cross-platform** — macOS (avfoundation), Linux (ALSA), Windows (DirectShow) via ffmpeg
 
@@ -118,20 +117,34 @@ Voice Scribe can transcribe with either ElevenLabs or Google Cloud — one activ
 
 | | ElevenLabs (default) | Google Cloud |
 |---|---|---|
-| Model | Scribe v2 Realtime | Chirp 3 (V2 streaming) |
+| Model | Scribe v2 Realtime | Speech-to-Text V2 streaming — `long` (default) or `chirp_3` |
 | Auth | API key (`voiceScribe.apiKey`) | gcloud Application Default Credentials — **no API key** |
 | Setup | *Voice Scribe: Configure API Key* | `gcloud auth application-default login` |
 | Transport | WebSocket (`wss://`) | gRPC streaming to a regional endpoint |
-| Keyterm biasing | ✅ (see [Custom Vocabulary](#custom-vocabulary)) | — (uses Chirp 3's built-in multilingual model) |
+| Keyterm biasing | ✅ (see [Custom Vocabulary](#custom-vocabulary)) | — (V2 streaming has no realtime biasing hook) |
 
 **Google setup (one time):**
 
 1. `gcloud auth application-default login`
 2. Ensure the Speech-to-Text API is enabled on your project (`gcloud services enable speech.googleapis.com`).
 3. *Voice Scribe: Select Provider* → **Google Cloud**.
-4. (Optional) Set `voiceScribe.googleProject` if ADC doesn't resolve your project, and `voiceScribe.googleLocation` (default `eu`) to a region that serves Chirp 3.
+4. (Optional) Set `voiceScribe.googleProject` if ADC doesn't resolve your project, and `voiceScribe.googleLocation` (default `eu`) to a region that serves your model.
 
-Chirp 3 handles Czech/English code-switching well in `"auto"` language mode.
+### Choosing a Google model — speed vs. accuracy
+
+Switch any time with `Cmd/Ctrl+Alt+M` (*Voice Scribe: Select Google Model*). The pick shows each model's trade-off.
+
+Measured end-to-end (keypress → text on screen), `eu` region, median of 3 runs:
+
+| Model | First text | Updates | Lag behind speech | Best for |
+|---|---|---|---|---|
+| **`long`** (default) | **~0.85s** | every ~60ms | ~185ms | Dictation. English matches Chirp 3 exactly. |
+| `short` | ~0.95s | every ~60ms | ~220ms | Short phrases and commands. |
+| `chirp_3` | ~5.6s | every ~5s | ~730ms | Czech and other non-English speech; the only model with language auto-detect. |
+
+**Why the gap:** the Chirp family emits a streaming result only once per ~5 seconds of audio, so a word spoken at 0.5s cannot appear until the 5-second boundary passes. The conformer models emit every ~60ms. On English both produce identical transcripts, which is why `long` is the default.
+
+**If you dictate in Czech** (or another non-English language), switch to `chirp_3` — it is noticeably more accurate there and handles Czech/English code-switching well in `"auto"` language mode. `long` and `short` require an explicit language; if `voiceScribe.language` is `"auto"` they fall back to `en-US` and tell you.
 
 ## Configuration
 
@@ -142,15 +155,14 @@ All settings are under `voiceScribe.*` in your VS Code settings.
 | `provider` | `"elevenlabs"` | Transcription engine: `"elevenlabs"` or `"google"`. Switch with *Voice Scribe: Select Provider*. |
 | `apiKey` | `""` | Your ElevenLabs API key (provider `elevenlabs` only) |
 | `googleProject` | `""` | GCP project ID (provider `google`). Empty = auto-detect from ADC. |
-| `googleLocation` | `"eu"` | GCP region for Chirp streaming, e.g. `eu`, `us`, `europe-west4`. Must support the model. |
-| `googleModel` | `"chirp_3"` | Google Speech-to-Text V2 model: `chirp_3` (recommended) or `chirp_2`. |
+| `googleLocation` | `"eu"` | GCP region for streaming, e.g. `eu`, `us`, `europe-west4`. Must serve the chosen model (`chirp_3` needs `eu`; `chirp_2` is not in `eu`). |
+| `googleModel` | `"long"` | Google Speech-to-Text V2 model. `long`/`short` = near-instant, need an explicit language. `chirp_3`/`chirp_2` = best non-English accuracy + auto-detect, but ~5s behind speech. Switch with *Voice Scribe: Select Google Model* (`Cmd/Ctrl+Alt+M`). |
 | `language` | `"auto"` | Language for recognition ([ISO 639-1 code](#supported-languages)). `"auto"` lets the engine detect your language (best for code-switching, e.g. Czech ↔ English). |
 | `insertMode` | `"smart"` | `"plain"` = as-is, `"comment"` = always wrap in line comment, `"smart"` = auto-comment in code, plain in prose |
 | `removeFiller` | `true` | Strip filler words (um, uh, hmm, mhm) from transcriptions |
 | `enableVoiceCommands` | `true` | Execute voice commands instead of typing them |
 | `target` | `"editor"` | `"editor"` = insert into active editor, `"terminal"` = send to integrated terminal |
 | `vadSensitivity` | `"medium"` | VAD preset: `"low"` (noisy), `"medium"` (normal), `"high"` (quiet) |
-| `noiseReduction` | `"neural"` | `"off"`, `"basic"` (highpass+lowpass+FFT), `"neural"` (basic + RNNoise) |
 | `autoVocabulary` | `true` | Auto-extract identifiers from open files and boost in recognition |
 | `customVocabulary` | `[]` | Custom terms to boost. See [Custom Vocabulary](#custom-vocabulary). |
 
@@ -174,7 +186,11 @@ Add domain-specific terms to improve recognition accuracy. Set in your `settings
 
 ### Select Language
 
-Use the command palette: `Cmd+Shift+P` → *Voice Scribe: Select Language* for a quick-pick menu instead of editing settings manually.
+Use the command palette: `Cmd+Shift+P` → *Voice Scribe: Select Language* (or `Cmd/Ctrl+Alt+L`) for a quick-pick menu instead of editing settings manually.
+
+### Select Google Model
+
+`Cmd/Ctrl+Alt+M`, or `Cmd+Shift+P` → *Voice Scribe: Select Google Model*. Each entry shows its latency/accuracy trade-off, and the picker warns if a model isn't served from your configured region or can't auto-detect your language. See [Choosing a Google model](#choosing-a-google-model--speed-vs-accuracy).
 
 ## Supported Languages
 
@@ -204,15 +220,15 @@ Editor ← handleCommitted() ← onFinal   (committed)  ← interim/final result
 Editor ← handlePartial()   ← onPartial (interim)
 ```
 
-1. **ffmpeg** captures microphone audio as 16 kHz / 16-bit / mono PCM with noise reduction filters
-2. Audio is buffered into exactly 3200-byte chunks (100 ms)
-3. A `TranscriptionProvider` streams those chunks to the selected engine:
+- **ffmpeg** captures raw microphone audio as 16 kHz / 16-bit / mono PCM
+- Audio is buffered into fixed chunks of `voiceScribe.audioChunkMs` (default 20 ms / 640 bytes) and flushed straight to the provider
+- A `TranscriptionProvider` streams those chunks to the selected engine:
    - **ElevenLabs** — base64 over an encrypted WebSocket (`wss://`) to the Scribe v2 realtime API
-   - **Google** — `{ audio }` frames over gRPC `StreamingRecognize` to a regional Chirp 3 endpoint (auth via ADC)
-4. Interim results (`onPartial`) replace the live zone — the model rewrites earlier words as context grows
-5. Final/committed results (`onFinal`) lock text in place, apply comment wrapping if needed, and advance the cursor
-6. An edit queue serializes all editor mutations to prevent race conditions
-7. On stop, a short drain window catches the last committed segment before closing the stream. The Google provider also transparently reopens its stream if it hits the V2 streaming duration cap mid-dictation.
+   - **Google** — `{ audio }` frames over gRPC `StreamingRecognize` to a regional endpoint (auth via ADC). The client, its gRPC channel and the resolved project ID are pre-warmed at activation and reused across recordings; the stream opens concurrently with ffmpeg, and audio captured during setup is buffered so the first word is never clipped.
+- Interim results (`onPartial`) replace the live zone — the model rewrites earlier words as context grows
+- Final/committed results (`onFinal`) lock text in place, apply comment wrapping if needed, and advance the cursor
+- An edit queue serializes all editor mutations to prevent race conditions
+- On stop, a short drain window catches the last committed segment before closing the stream. The Google provider also transparently reopens its stream if it hits the V2 streaming duration cap mid-dictation.
 
 ## Security & Privacy
 

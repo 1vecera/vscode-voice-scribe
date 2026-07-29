@@ -1,12 +1,9 @@
 import * as vscode from 'vscode';
 import { spawn, execSync, ChildProcess } from 'child_process';
 import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
-import * as https from 'https';
 
-const MODELS_DIR = path.join(os.homedir(), '.voicescribe', 'models');
-const RNNOISE_MODEL = 'sh.rnnn';
+/** 16 kHz, 16-bit, mono → 32 bytes per millisecond of audio. */
+const BYTES_PER_MS = 32;
 
 /**
  * Native audio capture using ffmpeg
@@ -52,68 +49,6 @@ export class AudioCapture {
         }
 
         return 'ffmpeg';
-    }
-
-    /**
-     * Ensure the RNNoise model file is available locally.
-     * Downloads from GitHub if not present.
-     * Returns the full path on success, null on failure.
-     */
-    async ensureRnnoiseModel(): Promise<string | null> {
-        const modelPath = path.join(MODELS_DIR, RNNOISE_MODEL);
-        if (fs.existsSync(modelPath)) {
-            return modelPath;
-        }
-
-        try {
-            fs.mkdirSync(MODELS_DIR, { recursive: true });
-
-            return await new Promise<string | null>((resolve) => {
-                const url = 'https://github.com/richardpl/arnndn-models/raw/refs/heads/master/sh.rnnn';
-                const followRedirect = (requestUrl: string, redirectCount: number) => {
-                    if (redirectCount > 5) {
-                        console.error('RNNoise model download: too many redirects');
-                        resolve(null);
-                        return;
-                    }
-                    https.get(requestUrl, (response) => {
-                        // Handle redirects (GitHub serves via redirect)
-                        if (response.statusCode && response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-                            response.resume(); // consume response to free memory
-                            followRedirect(response.headers.location, redirectCount + 1);
-                            return;
-                        }
-
-                        if (response.statusCode !== 200) {
-                            console.error(`RNNoise model download failed: HTTP ${response.statusCode}`);
-                            response.resume();
-                            resolve(null);
-                            return;
-                        }
-
-                        const fileStream = fs.createWriteStream(modelPath);
-                        response.pipe(fileStream);
-                        fileStream.on('finish', () => {
-                            fileStream.close();
-                            resolve(modelPath);
-                        });
-                        fileStream.on('error', (err) => {
-                            console.error('RNNoise model write error:', err);
-                            // Clean up partial file
-                            try { fs.unlinkSync(modelPath); } catch { /* ignore */ }
-                            resolve(null);
-                        });
-                    }).on('error', (err) => {
-                        console.error('RNNoise model download error:', err);
-                        resolve(null);
-                    });
-                };
-                followRedirect(url, 0);
-            });
-        } catch (err) {
-            console.error('RNNoise model setup error:', err);
-            return null;
-        }
     }
 
     /**
@@ -207,24 +142,7 @@ export class AudioCapture {
             return;
         }
 
-        // ── Build noise reduction filter chain ────────────────────────
         const config = vscode.workspace.getConfiguration('voiceScribe');
-        const noiseReduction = config.get<string>('noiseReduction', 'basic');
-
-        let afFilter: string | null = null;
-        if (noiseReduction === 'basic') {
-            afFilter = 'highpass=f=200,lowpass=f=3000,afftdn=nr=15:nf=-30';
-        } else if (noiseReduction === 'neural') {
-            const modelPath = await this.ensureRnnoiseModel();
-            if (modelPath) {
-                afFilter = `highpass=f=200,lowpass=f=3000,afftdn=nr=15:nf=-30,arnndn=m='${modelPath}':mix=0.85`;
-            } else {
-                // Fallback to basic if model download fails
-                afFilter = 'highpass=f=200,lowpass=f=3000,afftdn=nr=15:nf=-30';
-                vscode.window.showWarningMessage('Voice Scribe: RNNoise model not available, using basic noise reduction');
-            }
-        }
-        // 'off' leaves afFilter as null
 
         // ── Resolve platform-specific input format/device ─────────────
         // Done outside the Promise constructor below because the Windows
@@ -252,35 +170,44 @@ export class AudioCapture {
             throw new Error(`Unsupported platform: ${platform}`);
         }
 
+        // Smaller chunks reach the recognizer sooner. A 100 ms chunk withholds
+        // up to 100 ms of already-captured audio; 20 ms matches the ~60 ms
+        // cadence at which the low-latency models emit results.
+        const chunkMs = Math.max(10, Math.min(200, config.get<number>('audioChunkMs', 20)));
+        const chunkSize = Math.round(BYTES_PER_MS * chunkMs);
+
         return new Promise((resolve, reject) => {
             try {
                 const ffmpegArgs = [
+                    // Don't let the input layer sit on frames waiting to fill a buffer.
+                    '-fflags', 'nobuffer',
                     '-f', inputFormat,
                     '-i', inputDevice,
                     '-ac', '1',
                     '-ar', '16000',
-                    ...(afFilter ? ['-af', afFilter] : []),
                     '-f', 's16le',
+                    // Flush each packet to the pipe instead of accumulating in
+                    // the 32 KB AVIO buffer before handing bytes over.
+                    '-flush_packets', '1',
                     'pipe:1'
                 ];
 
                 console.log('Starting ffmpeg with args:', ffmpegArgs.join(' '));
-                
+
                 this.ffmpegProcess = spawn(this.ffmpegPath, ffmpegArgs);
                 this.isRecording = true;
 
                 // Handle stdout - audio data
                 let buffer = Buffer.alloc(0);
-                const chunkSize = 3200; // 100ms at 16kHz/16bit/mono
-                
+
                 this.ffmpegProcess.stdout?.on('data', (data: Buffer) => {
                     buffer = Buffer.concat([buffer, data]);
-                    
-                    // Send chunks as they reach 100ms
+
+                    // Emit fixed-size chunks as soon as enough audio has arrived
                     while (buffer.length >= chunkSize) {
                         const chunk = buffer.subarray(0, chunkSize);
                         buffer = buffer.subarray(chunkSize);
-                        
+
                         if (this.onAudioChunk) {
                             this.onAudioChunk(chunk);
                         }
@@ -311,13 +238,13 @@ export class AudioCapture {
                     }
                 });
 
-                // Small delay to ensure ffmpeg starts
-                setTimeout(() => {
-                    if (this.isRecording) {
-                        vscode.window.showInformationMessage('🎤 Recording started');
-                        resolve();
-                    }
-                }, 100);
+                // Resolve on the real signal that the process is up rather than
+                // a fixed 100 ms guess. A spawn failure still rejects via the
+                // 'error' handler above, which fires instead of 'spawn'.
+                this.ffmpegProcess.once('spawn', () => {
+                    vscode.window.showInformationMessage('🎤 Recording started');
+                    resolve();
+                });
 
             } catch (error) {
                 this.isRecording = false;

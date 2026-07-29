@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { TranscriptionProvider } from './transcriptionProvider';
 import { PROVIDERS, getProvider, DEFAULT_PROVIDER } from './providerRegistry';
+import { GOOGLE_MODELS } from './googleSpeechService';
 import { AudioCapture } from './audioCapture';
 import { ClaudePolishService } from './claudePolish';
 import { generateKeyterms } from './claudeKeyterms';
@@ -195,6 +196,11 @@ export function activate(context: vscode.ExtensionContext) {
         () => generateKeytermsCommandHandler()
     );
 
+    const selectGoogleModelCommand = vscode.commands.registerCommand(
+        'voiceScribe.selectGoogleModel',
+        () => selectGoogleModel()
+    );
+
     context.subscriptions.push(toggleRecordingCommand);
     context.subscriptions.push(configureApiKeyCommand);
     context.subscriptions.push(selectLanguageCommand);
@@ -202,6 +208,7 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(polishLastCommand);
     context.subscriptions.push(setRecordingPrefixCommand);
     context.subscriptions.push(generateKeytermsCommand);
+    context.subscriptions.push(selectGoogleModelCommand);
 
     // Invalidate the tracked paragraph when the user clicks/arrows away from it —
     // otherwise "polish that" could rewrite an unintended span.
@@ -245,7 +252,13 @@ function initializeServices() {
     transcriber = provider.create(config);
 
     if (transcriber) {
-        // Audio pipeline is provider-agnostic (16 kHz/16-bit/mono PCM, 100 ms chunks).
+        // Do auth / TLS / channel setup now so the toggle keybinding doesn't
+        // pay for it. Never rejects by contract, but guard anyway.
+        transcriber.prewarm?.().catch((error) => {
+            console.error('Provider pre-warm failed:', error);
+        });
+
+        // Audio pipeline is provider-agnostic (16 kHz/16-bit/mono PCM).
         audioCapture = new AudioCapture();
         audioCapture.initialize(async (chunk: Buffer) => {
             transcriber?.sendAudioChunk(chunk);
@@ -296,11 +309,15 @@ async function startRecording() {
             }
         }
 
-        // Auto-populate vocabulary from workspace (Task 10)
+        // Auto-populate vocabulary from workspace (Task 10).
+        // Only for providers that actually consume it — extraction runs a
+        // DocumentSymbolProvider, which can block on a cold language server,
+        // and that must not sit on the recording-start path for nothing.
         // Lazy-load to avoid requiring vscode in non-extension-host environments (tests)
         let autoVocabulary: Array<{ word: string; boost: number }> | undefined;
         const autoVocabConfig = vscode.workspace.getConfiguration('voiceScribe');
-        if (autoVocabConfig.get<boolean>('autoVocabulary', false)) {
+        const activeProvider = getProvider(autoVocabConfig.get<string>('provider', DEFAULT_PROVIDER));
+        if (activeProvider.usesVocabulary && autoVocabConfig.get<boolean>('autoVocabulary', false)) {
             try {
                 const { extractWorkspaceVocabulary } = await import('./vocabularyBuilder');
                 autoVocabulary = await extractWorkspaceVocabulary(100);
@@ -309,28 +326,31 @@ async function startRecording() {
             }
         }
 
-        // Start the provider connection with two callbacks
-        await transcriber.startTranscription(
-            // ── onPartial ───────────────────────────────────────────
-            // Each partial_transcript is the FULL rewritten hypothesis.
-            // The model rewrites earlier words as context grows.
-            // We replace the entire live zone each time.
-            (text: string) => {
-                resetIdleTimer();
-                enqueueEdit(() => handlePartial(text));
-            },
-            // ── onFinal ─────────────────────────────────────────────
-            // committed_transcript = locked in. Replace live zone one
-            // last time, remove decoration, advance cursor.
-            (text: string) => {
-                resetIdleTimer();
-                enqueueEdit(() => handleCommitted(text));
-            },
-            autoVocabulary
-        );
-
-        // Start audio capture
-        await audioCapture.startRecording();
+        // Open the recognizer stream and spawn ffmpeg concurrently — they are
+        // independent, so serialising them cost the sum of both setups instead
+        // of the slower one. Audio captured before the stream is ready is
+        // buffered by the provider, so nothing is clipped.
+        await Promise.all([
+            transcriber.startTranscription(
+                // ── onPartial ───────────────────────────────────────────
+                // Each partial_transcript is the FULL rewritten hypothesis.
+                // The model rewrites earlier words as context grows.
+                // We replace the entire live zone each time.
+                (text: string) => {
+                    resetIdleTimer();
+                    enqueueEdit(() => handlePartial(text));
+                },
+                // ── onFinal ─────────────────────────────────────────────
+                // committed_transcript = locked in. Replace live zone one
+                // last time, remove decoration, advance cursor.
+                (text: string) => {
+                    resetIdleTimer();
+                    enqueueEdit(() => handleCommitted(text));
+                },
+                autoVocabulary
+            ),
+            audioCapture.startRecording(),
+        ]);
 
         isRecording = true;
         startIdleTimer();
@@ -343,12 +363,15 @@ async function startRecording() {
         isRecording = false;
         stopIdleTimer();
         updateStatusBar();
-        // Best-effort cleanup of the provider side. If the session opened but
-        // audio capture then failed, the service's `isTranscribing` flag would
-        // otherwise stay true and the next attempt would throw "Already
-        // transcribing".
+        // Best-effort cleanup of both sides. They start concurrently, so either
+        // may have succeeded while the other failed: a live session would leave
+        // `isTranscribing` true and make the next attempt throw "Already
+        // transcribing", and a live ffmpeg would hold the microphone open.
         if (transcriber) {
             await transcriber.stopTranscription().catch(() => { /* ignore */ });
+        }
+        if (audioCapture) {
+            await audioCapture.stopRecording().catch(() => { /* ignore */ });
         }
         await vscode.commands.executeCommand('setContext', 'voiceScribe.recording', false);
         vscode.window.showErrorMessage(`Failed to start recording: ${error}`);
@@ -765,6 +788,60 @@ async function generateKeytermsCommandHandler() {
             }
         },
     );
+}
+
+/**
+ * Switch the Google speech model, surfacing the latency/accuracy trade-off in
+ * the pick itself so the choice doesn't require reading the settings docs.
+ *
+ * Also warns about the two mismatches that would otherwise fail at recording
+ * time: a model that isn't served from the configured region, and `auto`
+ * language on a model that can't auto-detect.
+ */
+async function selectGoogleModel() {
+    const config = vscode.workspace.getConfiguration('voiceScribe');
+    const current = config.get<string>('googleModel', 'long');
+    const location = config.get<string>('googleLocation', 'eu');
+    const language = config.get<string>('language') || 'auto';
+
+    const items = GOOGLE_MODELS.map(m => {
+        const unavailable = m.unavailableIn?.includes(location);
+        return {
+            label: m.label,
+            description: m.id === current ? '(current)' : m.id,
+            detail: unavailable
+                ? `$(warning) not available in region "${location}" — ${m.detail}`
+                : m.detail,
+            value: m.id,
+            unavailable,
+        };
+    });
+
+    const picked = await vscode.window.showQuickPick(items, {
+        placeHolder: `Google speech model (current: ${current}, region: ${location})`,
+        matchOnDetail: true,
+    });
+    if (!picked) { return; }
+
+    await config.update('googleModel', picked.value, vscode.ConfigurationTarget.Global);
+    initializeServices();
+
+    if (picked.unavailable) {
+        vscode.window.showWarningMessage(
+            `Voice Scribe: "${picked.value}" is not served from region "${location}". ` +
+            'Change "voiceScribe.googleLocation" or pick another model.',
+        );
+        return;
+    }
+    // Only the Chirp family auto-detects; warn now rather than at record time.
+    if (language === 'auto' && !picked.value.startsWith('chirp')) {
+        vscode.window.showWarningMessage(
+            `Voice Scribe: model set to ${picked.value}, which can't auto-detect language. ` +
+            'Pick your language with "Voice Scribe: Select Language" (currently "auto").',
+        );
+        return;
+    }
+    vscode.window.showInformationMessage(`Voice Scribe: Google model set to ${picked.value}.`);
 }
 
 async function selectProvider() {

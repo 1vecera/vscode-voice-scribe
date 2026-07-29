@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.0
+
+**Google dictation is now near-instant.** First text lands in ~0.85s instead of ~5.6s, and updates arrive every ~60ms instead of every 5s.
+
+Measured end-to-end (keypress → token rendered), `eu` region, median of 3 runs:
+
+| | first token | update cadence | lag behind speech |
+|---|---|---|---|
+| 0.5.1 (`chirp_3`) | ~5.6s | 5000ms | ~730ms |
+| **0.6.0 (`long`)** | **~0.85s** | **60ms** | **~185ms** |
+
+- **Default Google model is now `long`, not `chirp_3`.** This was the dominant cost by an order of magnitude: the Chirp family emits a streaming result only once per ~5 seconds of audio, so a word spoken at 0.5s could not appear before the 5s boundary. The conformer models (`long`, `short`) emit every ~60ms. On English the two produce byte-identical transcripts, so the old default was paying 5 seconds of latency for nothing.
+  - **If you dictate in Czech or another non-English language, switch back to `chirp_3`** — it is noticeably more accurate there (and is the only model that supports `voiceScribe.language: auto`). The new picker states the trade-off.
+- **New command `Voice Scribe: Select Google Model`** (`cmd/ctrl+alt+m`) — switch models from a quick-pick that shows each one's latency/accuracy trade-off, and warns up front about the two mismatches that used to fail only at record time: a model not served from your region, and `auto` language on a model that cannot auto-detect.
+- **`auto` language no longer breaks on non-Chirp models.** `long`/`short` reject `languageCodes: ['auto']` with a raw `INVALID_ARGUMENT`; the service now detects the incompatible pair, falls back to `en-US`, and tells you how to fix it properly.
+- **Auth and the gRPC channel are pre-warmed at activation**, and the client is reused across start/stop instead of being closed each time. `getProjectId()` alone measured 380–510ms and was paid on *every* recording start; it is now resolved once and cached.
+- **The recognizer stream and ffmpeg now start concurrently** rather than one after the other, so startup costs the slower of the two instead of their sum. Audio captured while the stream is still opening is buffered and flushed, so the first word is never clipped.
+- **Workspace vocabulary extraction is skipped for providers that ignore it.** It runs a `DocumentSymbolProvider`, which can block on a cold language server — and the Google provider discarded the result. Providers now declare `usesVocabulary` in the registry.
+- **Audio chunks are 20ms instead of 100ms** (`voiceScribe.audioChunkMs`, 10–200). A 100ms chunk withheld up to 100ms of already-captured audio; 20ms matches the models' ~60ms emission cadence. ffmpeg also gets `-fflags nobuffer` and `-flush_packets 1`.
+- Recording start no longer waits on a fixed 100ms timer; it resolves on ffmpeg's actual `spawn` event.
+- **Noise reduction has been removed.** Voice Scribe now sends raw microphone audio to the recognizer, avoiding the FFT denoiser's ~80ms latency and the 3kHz lowpass that discarded speech's fricative band. The obsolete `voiceScribe.noiseReduction` setting and RNNoise model download have also been removed.
+- Remaining latency is dominated by CoreAudio microphone capture (~350–500ms to first byte), which ffmpeg exposes no knob for.
+
 ## 0.5.1
 
 - Google provider: when no project can be resolved (empty `voiceScribe.googleProject`, no `gcloud config` project, no `GOOGLE_CLOUD_PROJECT`), fail with actionable guidance instead of a cryptic `Unable to detect a Project Id` error. Set `voiceScribe.googleProject`, run `gcloud config set project <id>`, or export `GOOGLE_CLOUD_PROJECT`.

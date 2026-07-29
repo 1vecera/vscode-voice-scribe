@@ -32,7 +32,9 @@ describe('GoogleSpeechService', () => {
             this.options = options;
             clients.push(this);
         }
+        initialized = false;
         getProjectId() { return Promise.resolve('adc-project'); }
+        initialize() { this.initialized = true; return Promise.resolve(); }
         _streamingRecognize() {
             const s = new MockStream();
             streams.push(s);
@@ -130,6 +132,88 @@ describe('GoogleSpeechService', () => {
             const svc = make();
             await svc.startTranscription(sinon.stub(), sinon.stub());
             await assert.rejects(svc.startTranscription(sinon.stub(), sinon.stub()), /Already transcribing/);
+        });
+    });
+
+    // ── model / language compatibility ─────────────────────────────────
+    describe('language compatibility', () => {
+        it('keeps auto-detect for chirp models', async () => {
+            mockVscode._configValues.set('language', 'auto');
+            const svc = make({ model: 'chirp_3' });
+            await svc.startTranscription(sinon.stub(), sinon.stub());
+            assert.deepStrictEqual(streams[0].writes[0].streamingConfig.config.languageCodes, ['auto']);
+        });
+
+        it('falls back to en-US when a conformer model gets auto, and warns', async () => {
+            mockVscode._configValues.set('language', 'auto');
+            const svc = make({ model: 'long' });
+            await svc.startTranscription(sinon.stub(), sinon.stub());
+            // 'long' rejects 'auto' server-side, so it must never be sent.
+            assert.deepStrictEqual(streams[0].writes[0].streamingConfig.config.languageCodes, ['en-US']);
+            sinon.assert.called(mockVscode.window.showWarningMessage);
+        });
+
+        it('leaves an explicit language alone on a conformer model', async () => {
+            mockVscode._configValues.set('language', 'cs');
+            const svc = make({ model: 'long' });
+            await svc.startTranscription(sinon.stub(), sinon.stub());
+            assert.deepStrictEqual(streams[0].writes[0].streamingConfig.config.languageCodes, ['cs-CZ']);
+            sinon.assert.notCalled(mockVscode.window.showWarningMessage);
+        });
+    });
+
+    // ── latency behaviours ─────────────────────────────────────────────
+    describe('startup latency', () => {
+        it('buffers audio sent before the stream is open and flushes it after', async () => {
+            const svc = make();
+            // Hold the project-id resolution open so the stream isn't ready yet.
+            let release: () => void = () => { };
+            sinon.stub(MockSpeechClient.prototype, 'getProjectId')
+                .returns(new Promise<string>((r) => { release = () => r('adc-project'); }));
+
+            const started = svc.startTranscription(sinon.stub(), sinon.stub());
+            const early = Buffer.from([9, 9]);
+            svc.sendAudioChunk(early);          // arrives before the stream exists
+            assert.strictEqual(streams.length, 0, 'no stream yet');
+
+            release();
+            await started;
+
+            const audioWrites = streams[0].writes.filter((w: any) => w.audio);
+            assert.strictEqual(audioWrites.length, 1, 'buffered chunk should be flushed');
+            assert.strictEqual(audioWrites[0].audio, early);
+        });
+
+        it('reuses the client across start/stop so the gRPC channel stays warm', async () => {
+            const svc = make();
+            await svc.startTranscription(sinon.stub(), sinon.stub());
+            await svc.stopTranscription();
+            await svc.startTranscription(sinon.stub(), sinon.stub());
+
+            assert.strictEqual(clients.length, 1, 'expected one client across both sessions');
+            assert.strictEqual(clients[0].closed, false, 'client must not be closed on stop');
+            assert.strictEqual(streams.length, 2, 'but a fresh stream per session');
+        });
+
+        it('closes the client only on dispose', async () => {
+            const svc = make();
+            await svc.startTranscription(sinon.stub(), sinon.stub());
+            await svc.stopTranscription();
+            assert.strictEqual(clients[0].closed, false);
+            svc.dispose();
+            assert.strictEqual(clients[0].closed, true);
+        });
+
+        it('prewarm resolves the project id and never rejects', async () => {
+            const svc = make();
+            await svc.prewarm();   // must not throw
+            assert.strictEqual(clients.length, 1);
+        });
+
+        it('prewarm swallows auth failures so activation stays clean', async () => {
+            sinon.stub(MockSpeechClient.prototype, 'getProjectId').rejects(new Error('no ADC'));
+            const svc = make();
+            await svc.prewarm();   // must not throw
         });
     });
 

@@ -35,6 +35,16 @@ export interface TranscriptionProvider {
     /** Everything committed so far this session. */
     getFullTranscript(): string;
 
+    /**
+     * Optional: do the expensive connection setup ahead of the first recording
+     * — auth, DNS, TLS, channel establishment — so the toggle keybinding doesn't
+     * pay for it. Called at activation and after a settings change.
+     *
+     * Must never reject: a machine that isn't authenticated yet has to activate
+     * cleanly, with the real error surfacing on the first recording attempt.
+     */
+    prewarm?(): Promise<void>;
+
     /** Tear down sockets/streams/clients. */
     dispose(): void;
 }
