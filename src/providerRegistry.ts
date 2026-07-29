@@ -28,6 +28,8 @@ export interface ProviderDescriptor {
      * "chosen but not set up yet".
      */
     create(config: vscode.WorkspaceConfiguration): TranscriptionProvider | null;
+    /** Whether the provider has enough local configuration to start. */
+    isConfigured(config: vscode.WorkspaceConfiguration): boolean;
     /** Walk the user through setting up credentials for this provider. */
     configure(config: vscode.WorkspaceConfiguration): Promise<void>;
     /** One-line hint shown when the provider is selected but `create()` returns null. */
@@ -53,6 +55,7 @@ export const PROVIDERS: ProviderDescriptor[] = [
             const apiKey = config.get<string>('apiKey');
             return apiKey ? new ElevenLabsService(apiKey) : null;
         },
+        isConfigured: (config) => Boolean(config.get<string>('apiKey')),
         configure: async (config) => {
             const apiKey = await vscode.window.showInputBox({
                 prompt: 'Enter your ElevenLabs API key',
@@ -78,6 +81,7 @@ export const PROVIDERS: ProviderDescriptor[] = [
             location: config.get<string>('googleLocation', 'eu'),
             model: config.get<string>('googleModel', 'long'),
         }),
+        isConfigured: () => true,
         configure: async () => {
             vscode.window.showInformationMessage(
                 'The Google provider uses gcloud Application Default Credentials — no API key needed. ' +

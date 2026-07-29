@@ -232,11 +232,56 @@ describe('GoogleSpeechService', () => {
             sinon.assert.calledWith(onFinal, 'Hello world.');
         });
 
+        it('combines consecutive interim results into one editor hypothesis', async () => {
+            const onPartial = sinon.stub();
+            const svc = make({ model: 'long' });
+            await svc.startTranscription(onPartial, sinon.stub());
+
+            streams[0].emit('data', {
+                results: [
+                    { isFinal: false, alternatives: [{ transcript: 'to be' }] },
+                    { isFinal: false, alternatives: [{ transcript: ' or not to be' }] },
+                ],
+            });
+
+            sinon.assert.calledOnceWithExactly(onPartial, 'to be or not to be');
+        });
+
+        it('commits the settled result before sending the remaining interim hypothesis', async () => {
+            const callbacks: string[] = [];
+            const svc = make({ model: 'long' });
+            await svc.startTranscription(
+                (text: string) => callbacks.push(`partial:${text}`),
+                (text: string) => callbacks.push(`final:${text}`),
+            );
+
+            streams[0].emit('data', {
+                results: [
+                    { isFinal: true, alternatives: [{ transcript: 'Settled.' }] },
+                    { isFinal: false, alternatives: [{ transcript: ' Still' }] },
+                    { isFinal: false, alternatives: [{ transcript: ' changing' }] },
+                ],
+            });
+
+            assert.deepStrictEqual(callbacks, [
+                'final:Settled.',
+                'partial: Still changing',
+            ]);
+        });
+
         it('accumulates committed segments into the full transcript', async () => {
             const svc = make();
             await svc.startTranscription(sinon.stub(), sinon.stub());
             streams[0].emit('data', { results: [{ isFinal: true, alternatives: [{ transcript: 'First.' }] }] });
             streams[0].emit('data', { results: [{ isFinal: true, alternatives: [{ transcript: 'Second.' }] }] });
+            assert.strictEqual(svc.getFullTranscript(), 'First. Second.');
+        });
+
+        it('normalizes leading spaces between committed segments', async () => {
+            const svc = make();
+            await svc.startTranscription(sinon.stub(), sinon.stub());
+            streams[0].emit('data', { results: [{ isFinal: true, alternatives: [{ transcript: 'First.' }] }] });
+            streams[0].emit('data', { results: [{ isFinal: true, alternatives: [{ transcript: ' Second.' }] }] });
             assert.strictEqual(svc.getFullTranscript(), 'First. Second.');
         });
 

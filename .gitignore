@@ -5,7 +5,7 @@ out/
 .env
 .DS_Store
 credentials/
-.github/
+.github/agents/
 .claude/
 tmp/
 backlog.md

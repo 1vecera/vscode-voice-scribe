@@ -306,18 +306,29 @@ export class GoogleSpeechService implements TranscriptionProvider {
     }
 
     private handleResponse(resp: StreamingResponse): void {
+        let interimText = '';
+
         for (const result of resp.results ?? []) {
             const text = result.alternatives?.[0]?.transcript ?? '';
             if (!text) { continue; }
-            // Privacy: log type + length only, never transcript content.
+
             if (result.isFinal) {
                 log(`← final (${text.length} chars)`);
-                this.fullTranscript += (this.fullTranscript ? ' ' : '') + text;
+                const normalizedText = text.trim();
+                this.fullTranscript += (this.fullTranscript ? ' ' : '') + normalizedText;
                 this.onFinal?.(text);
             } else {
-                log(`← partial (${text.length} chars)`);
-                this.onPartial?.(text);
+                interimText += text;
             }
+        }
+
+        // Google may return several consecutive interim results in one
+        // response. Together they are the current hypothesis; sending each
+        // fragment separately makes the editor repeatedly overwrite the same
+        // live range and leaves only the final fragment visible.
+        if (interimText) {
+            log(`← partial (${interimText.length} chars)`);
+            this.onPartial?.(interimText);
         }
     }
 
