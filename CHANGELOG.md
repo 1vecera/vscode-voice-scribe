@@ -20,7 +20,7 @@ Measured end-to-end (keypress → token rendered), `eu` region, median of 3 runs
 - **Workspace vocabulary extraction is skipped for providers that ignore it.** It runs a `DocumentSymbolProvider`, which can block on a cold language server — and the Google provider discarded the result. Providers now declare `usesVocabulary` in the registry.
 - **Audio chunks are 20ms instead of 100ms** (`voiceScribe.audioChunkMs`, 10–200). A 100ms chunk withheld up to 100ms of already-captured audio; 20ms matches the models' ~60ms emission cadence. ffmpeg also gets `-fflags nobuffer` and `-flush_packets 1`.
 - Recording start no longer waits on a fixed 100ms timer; it resolves on ffmpeg's actual `spawn` event.
-- Documented two measured findings that remain your call: `noiseReduction: off` shaves a further ~80ms (the FFT denoiser's cost, ~0.85s → ~0.82s first token and ~185ms → ~153ms lag), and the `basic` preset's 3kHz lowpass discards the fricative band, which can cost recognition accuracy.
+- **Noise reduction has been removed.** Voice Scribe now sends raw microphone audio to the recognizer, avoiding the FFT denoiser's ~80ms latency and the 3kHz lowpass that discarded speech's fricative band. The obsolete `voiceScribe.noiseReduction` setting and RNNoise model download have also been removed.
 - Remaining latency is dominated by CoreAudio microphone capture (~350–500ms to first byte), which ffmpeg exposes no knob for.
 
 ## 0.5.1

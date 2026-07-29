@@ -1,12 +1,6 @@
 import * as vscode from 'vscode';
 import { spawn, execSync, ChildProcess } from 'child_process';
 import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
-import * as https from 'https';
-
-const MODELS_DIR = path.join(os.homedir(), '.voicescribe', 'models');
-const RNNOISE_MODEL = 'sh.rnnn';
 
 /** 16 kHz, 16-bit, mono → 32 bytes per millisecond of audio. */
 const BYTES_PER_MS = 32;
@@ -55,68 +49,6 @@ export class AudioCapture {
         }
 
         return 'ffmpeg';
-    }
-
-    /**
-     * Ensure the RNNoise model file is available locally.
-     * Downloads from GitHub if not present.
-     * Returns the full path on success, null on failure.
-     */
-    async ensureRnnoiseModel(): Promise<string | null> {
-        const modelPath = path.join(MODELS_DIR, RNNOISE_MODEL);
-        if (fs.existsSync(modelPath)) {
-            return modelPath;
-        }
-
-        try {
-            fs.mkdirSync(MODELS_DIR, { recursive: true });
-
-            return await new Promise<string | null>((resolve) => {
-                const url = 'https://github.com/richardpl/arnndn-models/raw/refs/heads/master/sh.rnnn';
-                const followRedirect = (requestUrl: string, redirectCount: number) => {
-                    if (redirectCount > 5) {
-                        console.error('RNNoise model download: too many redirects');
-                        resolve(null);
-                        return;
-                    }
-                    https.get(requestUrl, (response) => {
-                        // Handle redirects (GitHub serves via redirect)
-                        if (response.statusCode && response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-                            response.resume(); // consume response to free memory
-                            followRedirect(response.headers.location, redirectCount + 1);
-                            return;
-                        }
-
-                        if (response.statusCode !== 200) {
-                            console.error(`RNNoise model download failed: HTTP ${response.statusCode}`);
-                            response.resume();
-                            resolve(null);
-                            return;
-                        }
-
-                        const fileStream = fs.createWriteStream(modelPath);
-                        response.pipe(fileStream);
-                        fileStream.on('finish', () => {
-                            fileStream.close();
-                            resolve(modelPath);
-                        });
-                        fileStream.on('error', (err) => {
-                            console.error('RNNoise model write error:', err);
-                            // Clean up partial file
-                            try { fs.unlinkSync(modelPath); } catch { /* ignore */ }
-                            resolve(null);
-                        });
-                    }).on('error', (err) => {
-                        console.error('RNNoise model download error:', err);
-                        resolve(null);
-                    });
-                };
-                followRedirect(url, 0);
-            });
-        } catch (err) {
-            console.error('RNNoise model setup error:', err);
-            return null;
-        }
     }
 
     /**
@@ -210,24 +142,7 @@ export class AudioCapture {
             return;
         }
 
-        // ── Build noise reduction filter chain ────────────────────────
         const config = vscode.workspace.getConfiguration('voiceScribe');
-        const noiseReduction = config.get<string>('noiseReduction', 'basic');
-
-        let afFilter: string | null = null;
-        if (noiseReduction === 'basic') {
-            afFilter = 'highpass=f=200,lowpass=f=3000,afftdn=nr=15:nf=-30';
-        } else if (noiseReduction === 'neural') {
-            const modelPath = await this.ensureRnnoiseModel();
-            if (modelPath) {
-                afFilter = `highpass=f=200,lowpass=f=3000,afftdn=nr=15:nf=-30,arnndn=m='${modelPath}':mix=0.85`;
-            } else {
-                // Fallback to basic if model download fails
-                afFilter = 'highpass=f=200,lowpass=f=3000,afftdn=nr=15:nf=-30';
-                vscode.window.showWarningMessage('Voice Scribe: RNNoise model not available, using basic noise reduction');
-            }
-        }
-        // 'off' leaves afFilter as null
 
         // ── Resolve platform-specific input format/device ─────────────
         // Done outside the Promise constructor below because the Windows
@@ -270,7 +185,6 @@ export class AudioCapture {
                     '-i', inputDevice,
                     '-ac', '1',
                     '-ar', '16000',
-                    ...(afFilter ? ['-af', afFilter] : []),
                     '-f', 's16le',
                     // Flush each packet to the pipe instead of accumulating in
                     // the 32 KB AVIO buffer before handing bytes over.

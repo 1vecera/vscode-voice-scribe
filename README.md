@@ -21,9 +21,8 @@
 - **Prefix commands** — say "todo fix the login bug" and it inserts `TODO: fix the login bug`. Also supports `FIXME`, `NOTE`, `HACK`.
 - **Terminal target** — send transcriptions directly to the integrated terminal instead of the editor
 
-### Audio Quality
+### Audio
 
-- **Neural noise reduction** — RNNoise neural denoiser on top of highpass/lowpass/FFT filters. Downloads a small model on first use. Three levels: `off`, `basic`, `neural` (default).
 - **VAD sensitivity presets** — `low` (noisy office/cafe), `medium` (normal room), `high` (quiet room/headset). Controls how aggressively non-speech audio is rejected.
 - **Cross-platform** — macOS (avfoundation), Linux (ALSA), Windows (DirectShow) via ffmpeg
 
@@ -164,7 +163,6 @@ All settings are under `voiceScribe.*` in your VS Code settings.
 | `enableVoiceCommands` | `true` | Execute voice commands instead of typing them |
 | `target` | `"editor"` | `"editor"` = insert into active editor, `"terminal"` = send to integrated terminal |
 | `vadSensitivity` | `"medium"` | VAD preset: `"low"` (noisy), `"medium"` (normal), `"high"` (quiet) |
-| `noiseReduction` | `"neural"` | `"off"`, `"basic"` (highpass+lowpass+FFT), `"neural"` (basic + RNNoise) |
 | `autoVocabulary` | `true` | Auto-extract identifiers from open files and boost in recognition |
 | `customVocabulary` | `[]` | Custom terms to boost. See [Custom Vocabulary](#custom-vocabulary). |
 
@@ -222,15 +220,15 @@ Editor ← handleCommitted() ← onFinal   (committed)  ← interim/final result
 Editor ← handlePartial()   ← onPartial (interim)
 ```
 
-1. **ffmpeg** captures microphone audio as 16 kHz / 16-bit / mono PCM with noise reduction filters
-2. Audio is buffered into fixed chunks of `voiceScribe.audioChunkMs` (default 20 ms / 640 bytes) and flushed straight to the provider
-3. A `TranscriptionProvider` streams those chunks to the selected engine:
+- **ffmpeg** captures raw microphone audio as 16 kHz / 16-bit / mono PCM
+- Audio is buffered into fixed chunks of `voiceScribe.audioChunkMs` (default 20 ms / 640 bytes) and flushed straight to the provider
+- A `TranscriptionProvider` streams those chunks to the selected engine:
    - **ElevenLabs** — base64 over an encrypted WebSocket (`wss://`) to the Scribe v2 realtime API
    - **Google** — `{ audio }` frames over gRPC `StreamingRecognize` to a regional endpoint (auth via ADC). The client, its gRPC channel and the resolved project ID are pre-warmed at activation and reused across recordings; the stream opens concurrently with ffmpeg, and audio captured during setup is buffered so the first word is never clipped.
-4. Interim results (`onPartial`) replace the live zone — the model rewrites earlier words as context grows
-5. Final/committed results (`onFinal`) lock text in place, apply comment wrapping if needed, and advance the cursor
-6. An edit queue serializes all editor mutations to prevent race conditions
-7. On stop, a short drain window catches the last committed segment before closing the stream. The Google provider also transparently reopens its stream if it hits the V2 streaming duration cap mid-dictation.
+- Interim results (`onPartial`) replace the live zone — the model rewrites earlier words as context grows
+- Final/committed results (`onFinal`) lock text in place, apply comment wrapping if needed, and advance the cursor
+- An edit queue serializes all editor mutations to prevent race conditions
+- On stop, a short drain window catches the last committed segment before closing the stream. The Google provider also transparently reopens its stream if it hits the V2 streaming duration cap mid-dictation.
 
 ## Security & Privacy
 

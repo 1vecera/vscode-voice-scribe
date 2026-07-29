@@ -274,21 +274,6 @@
           },
           "description": "Custom vocabulary for improved recognition of domain-specific terms. Max 200 entries. Each entry requires a 'word' and optionally 'boost' (1.0-10.0) and 'phonemes'."
         },
-        "voiceScribe.noiseReduction": {
-          "type": "string",
-          "default": "basic",
-          "enum": [
-            "off",
-            "basic",
-            "neural"
-          ],
-          "enumDescriptions": [
-            "No audio filters — raw microphone input sent directly. Lowest latency (the FFT denoiser in 'basic' adds roughly 80ms). Recommended if your mic captures at moderate gain levels.",
-            "Basic filters: highpass, lowpass, and FFT-based denoising (default). Note the 3kHz lowpass also discards the fricative band, which can cost some recognition accuracy.",
-            "Enhanced: basic filters plus RNNoise neural noise suppression (downloads a small model on first use). Aggressive — may suppress speech from low-gain mics."
-          ],
-          "description": "Audio noise reduction level applied before sending audio to the speech recognition API. Try 'off' if dictation is being silently dropped, or to shave the filter's added latency."
-        },
         "voiceScribe.audioChunkMs": {
           "type": "number",
           "default": 20,
