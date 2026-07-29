@@ -1,8 +1,8 @@
 {
   "name": "voice-scribe",
   "displayName": "Voice Scribe",
-  "description": "High-quality real-time voice-to-text for VS Code with live rewriting — ElevenLabs Scribe v2 or Google Cloud Chirp 3",
-  "version": "0.5.1",
+  "description": "High-quality real-time voice-to-text for VS Code with live rewriting — ElevenLabs Scribe v2 or Google Cloud Speech-to-Text V2",
+  "version": "0.6.0",
   "publisher": "1vecera",
   "icon": "images/icon.png",
   "engines": {
@@ -27,7 +27,8 @@
     "onCommand:voiceScribe.selectProvider",
     "onCommand:voiceScribe.polishLast",
     "onCommand:voiceScribe.setRecordingPrefix",
-    "onCommand:voiceScribe.generateKeyterms"
+    "onCommand:voiceScribe.generateKeyterms",
+    "onCommand:voiceScribe.selectGoogleModel"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -59,6 +60,10 @@
       {
         "command": "voiceScribe.generateKeyterms",
         "title": "Voice Scribe: Generate Keyterms from Open Files (Claude Opus)"
+      },
+      {
+        "command": "voiceScribe.selectGoogleModel",
+        "title": "Voice Scribe: Select Google Model (latency vs. accuracy)"
       }
     ],
     "configuration": {
@@ -73,7 +78,7 @@
           ],
           "enumDescriptions": [
             "ElevenLabs Scribe v2 Realtime (requires an API key)",
-            "Google Cloud Speech-to-Text — Chirp 3 streaming (uses gcloud Application Default Credentials; no API key)"
+            "Google Cloud Speech-to-Text V2 streaming (uses gcloud Application Default Credentials; no API key). Model is chosen with 'voiceScribe.googleModel'."
           ],
           "description": "Speech-to-text provider. Switch with the 'Voice Scribe: Select Provider' command. ElevenLabs uses an API key; Google uses gcloud ADC (run 'gcloud auth application-default login')."
         },
@@ -94,16 +99,20 @@
         },
         "voiceScribe.googleModel": {
           "type": "string",
-          "default": "chirp_3",
+          "default": "long",
           "enum": [
+            "long",
+            "short",
             "chirp_3",
             "chirp_2"
           ],
           "enumDescriptions": [
-            "Chirp 3 — latest multilingual model, best accuracy and code-switching (default, recommended)",
-            "Chirp 2 — previous generation"
+            "Long (default, recommended) — near-instant: first text ~0.8s, updates every ~60ms. Best for dictation. Requires an explicit language (no auto-detect).",
+            "Short — same low latency as 'long', tuned for brief utterances. Requires an explicit language.",
+            "Chirp 3 — best multilingual accuracy and code-switching, and the only option supporting language auto-detect. Streams in ~5-second blocks, so text appears ~5s behind speech.",
+            "Chirp 2 — previous multilingual generation, same ~5-second streaming behaviour. Not available in the 'eu' location; use e.g. 'europe-west4' or 'us-central1'."
           ],
-          "description": "Google Speech-to-Text V2 model used for streaming transcription."
+          "markdownDescription": "Google Speech-to-Text V2 model used for streaming transcription.\n\n**Latency vs. accuracy** (measured, `eu` region): `long` returns first text in ~0.8s and updates every ~60ms; `chirp_3` emits only once per ~5 seconds of audio. On English the two produce identical transcripts, so `long` is the better default. For Czech and other non-English speech `chirp_3` is noticeably more accurate — switch if accuracy matters more than responsiveness.\n\nOnly the Chirp models support `voiceScribe.language: auto`; with `long`/`short` you must pick a language."
         },
         "voiceScribe.language": {
           "type": "string",
@@ -274,11 +283,18 @@
             "neural"
           ],
           "enumDescriptions": [
-            "No audio filters — raw microphone input sent directly. Recommended if your mic captures at moderate gain levels.",
-            "Basic filters: highpass, lowpass, and FFT-based denoising (default)",
+            "No audio filters — raw microphone input sent directly. Lowest latency (the FFT denoiser in 'basic' adds roughly 80ms). Recommended if your mic captures at moderate gain levels.",
+            "Basic filters: highpass, lowpass, and FFT-based denoising (default). Note the 3kHz lowpass also discards the fricative band, which can cost some recognition accuracy.",
             "Enhanced: basic filters plus RNNoise neural noise suppression (downloads a small model on first use). Aggressive — may suppress speech from low-gain mics."
           ],
-          "description": "Audio noise reduction level applied before sending audio to the speech recognition API. Try 'off' if dictation is being silently dropped."
+          "description": "Audio noise reduction level applied before sending audio to the speech recognition API. Try 'off' if dictation is being silently dropped, or to shave the filter's added latency."
+        },
+        "voiceScribe.audioChunkMs": {
+          "type": "number",
+          "default": 20,
+          "minimum": 10,
+          "maximum": 200,
+          "description": "Size of each audio chunk sent to the speech API, in milliseconds. Smaller chunks reach the recognizer sooner (lower latency) at the cost of slightly more network messages. 20ms matches the ~60ms cadence at which the low-latency models emit results; raise it if you see network overhead."
         },
         "voiceScribe.audioDevice": {
           "type": "string",
@@ -349,6 +365,11 @@
         "command": "voiceScribe.selectLanguage",
         "key": "ctrl+alt+l",
         "mac": "cmd+alt+l"
+      },
+      {
+        "command": "voiceScribe.selectGoogleModel",
+        "key": "ctrl+alt+m",
+        "mac": "cmd+alt+m"
       }
     ]
   },

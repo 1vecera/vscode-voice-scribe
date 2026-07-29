@@ -116,6 +116,11 @@ export function createMockVscode() {
 
 /**
  * Creates a mock ChildProcess (EventEmitter with stdout, stderr, stdin, kill).
+ *
+ * Emits 'spawn' on the next tick like a real successfully-spawned process, so
+ * callers that wait for it (AudioCapture.startRecording) resolve. Listeners are
+ * always attached synchronously after `spawn()` returns, so a next-tick emit is
+ * never missed.
  */
 export function createMockChildProcess() {
     const proc: any = new EventEmitter();
@@ -127,5 +132,6 @@ export function createMockChildProcess() {
     };
     proc.kill = sinon.stub();
     proc.pid = 12345;
+    setImmediate(() => proc.emit('spawn'));
     return proc;
 }

@@ -70,9 +70,9 @@ describe('providerRegistry', () => {
         });
     });
 
-    it('google.create defaults location=eu, model=chirp_3, project=undefined', () => {
+    it('google.create defaults location=eu, model=long, project=undefined', () => {
         registry.getProvider('google').create(config());
-        sinon.assert.calledWithMatch(GoogleCtor, { location: 'eu', model: 'chirp_3', project: undefined });
+        sinon.assert.calledWithMatch(GoogleCtor, { location: 'eu', model: 'long', project: undefined });
     });
 
     // ── configure() ────────────────────────────────────────────────────

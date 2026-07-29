@@ -97,9 +97,9 @@ describe('Extension', () => {
     // ── activate ───────────────────────────────────────────────────────
 
     describe('activate', () => {
-        it('should register 7 commands', () => {
+        it('should register 8 commands', () => {
             ext.activate(mockContext);
-            assert.strictEqual(mockVscode.commands.registerCommand.callCount, 7);
+            assert.strictEqual(mockVscode.commands.registerCommand.callCount, 8);
         });
 
         it('should register voiceScribe.toggleRecording command', () => {

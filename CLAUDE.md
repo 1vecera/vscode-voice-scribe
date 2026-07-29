@@ -38,7 +38,7 @@ Tests require `npm run compile` first (the `pretest` script handles this for `np
 ### Core Data Flow
 
 ```
-Microphone → ffmpeg (child_process) → 100ms PCM chunks → WebSocket → ElevenLabs API
+Microphone → ffmpeg (child_process) → 20ms PCM chunks → WebSocket/gRPC → provider
                                                                           ↓
 Editor ← handleCommitted() ← committed_transcript    ←──── VAD silence detection
 Editor ← handlePartial()   ← partial_transcript      ←──── interim hypothesis
@@ -50,13 +50,17 @@ Editor ← handlePartial()   ← partial_transcript      ←──── interim
 
 - **transcriptionProvider.ts** — The provider contract (`startTranscription(onPartial,onFinal)`, `sendAudioChunk`, `stopTranscription`, `getFullTranscript`, `dispose`). Every backend implements it.
 
-- **providerRegistry.ts** — Data-driven registry of providers. Each `ProviderDescriptor` carries `{id, label, detail, create(config), configure(config), setupHint}`. `extension.ts` reads it for init, the provider picker, credential setup, and the not-set-up guard — **no per-provider branching anywhere**. **To add a provider:** implement `TranscriptionProvider` in `src/<name>Service.ts`, append one descriptor to `PROVIDERS`, and add the id (+ any `voiceScribe.<name>*` settings) to package.json.
+- **providerRegistry.ts** — Data-driven registry of providers. Each `ProviderDescriptor` carries `{id, label, detail, create(config), configure(config), setupHint, usesVocabulary}`. `usesVocabulary` keeps the costly `DocumentSymbolProvider` extraction off the start path for backends that ignore it. `extension.ts` reads it for init, the provider picker, credential setup, and the not-set-up guard — **no per-provider branching anywhere**. **To add a provider:** implement `TranscriptionProvider` in `src/<name>Service.ts`, append one descriptor to `PROVIDERS`, and add the id (+ any `voiceScribe.<name>*` settings) to package.json.
 
 - **elevenLabsService.ts** — WebSocket client for the ElevenLabs realtime STT API. Sends base64-encoded audio chunks, receives partial/committed transcript messages. On stop, waits 2 seconds for final VAD commits before closing.
 
-- **googleSpeechService.ts** — Google Cloud Speech-to-Text V2 streaming (Chirp 3) over gRPC `_streamingRecognize`. Auth via ADC (no API key), regional endpoint `<location>-speech.googleapis.com`, config-first write then `{audio}` frames, interim→onPartial / final→onFinal. Reopens the stream on the V2 duration cap. Maps the ISO 639-1 language picker to BCP-47.
+- **googleSpeechService.ts** — Google Cloud Speech-to-Text V2 streaming over gRPC `_streamingRecognize`. Auth via ADC (no API key), regional endpoint `<location>-speech.googleapis.com`, config-first write then `{audio}` frames, interim→onPartial / final→onFinal. Reopens the stream on the V2 duration cap. Maps the ISO 639-1 language picker to BCP-47.
+  - **Model choice is the dominant latency factor.** The Chirp family (`chirp_3`, `chirp_2`) emits a streaming result only once per ~5s of audio; the conformer models (`long`, `short`) emit every ~60ms. Default is `long`. `GOOGLE_MODELS` carries the selectable list plus each model's trade-off and unavailable regions, and drives the `selectGoogleModel` picker.
+  - **Only Chirp models accept `languageCodes: ['auto']`** — `supportsAutoLanguage()` gates this and falls back to `en-US` with a warning rather than letting the API reject the stream.
+  - **The client and its gRPC channel are long-lived**: built once, pre-warmed via `prewarm()` at activation, reused across start/stop, closed only in `dispose()`. Only the stream is per-recording. The ADC project id is cached module-wide (`getProjectId()` costs 380–510ms).
+  - Audio arriving before the stream is open is queued in `pendingAudio` and flushed once the config message is out, so the concurrent start in `extension.ts` cannot clip the first word.
 
-- **audioCapture.ts** — Spawns ffmpeg with platform-specific input (`avfoundation` on macOS, `alsa` on Linux, `dshow` on Windows). Outputs 16kHz/16-bit/mono PCM. Buffers stdout into exactly 3200-byte chunks (100ms of audio). Provider-agnostic — feeds whichever provider is active.
+- **audioCapture.ts** — Spawns ffmpeg with platform-specific input (`avfoundation` on macOS, `alsa` on Linux, `dshow` on Windows). Outputs 16kHz/16-bit/mono PCM. Buffers stdout into fixed chunks of `voiceScribe.audioChunkMs` (default 20ms = 640 bytes; `BYTES_PER_MS = 32`). Uses `-fflags nobuffer` and `-flush_packets 1`, and resolves on ffmpeg's `spawn` event rather than a fixed timer. Provider-agnostic — feeds whichever provider is active.
 
 ### Key State in extension.ts
 
@@ -66,9 +70,9 @@ Editor ← handlePartial()   ← partial_transcript      ←──── interim
 
 ### Extension Manifest
 
-Commands: `voiceScribe.toggleRecording`, `configureApiKey`, `selectLanguage`, `selectProvider`, `polishLast`, `setRecordingPrefix`, `generateKeyterms`
-Keybinding: `Cmd+Alt+V` / `Ctrl+Alt+V` toggles recording
-Configuration: `voiceScribe.provider` (`elevenlabs`|`google`), `voiceScribe.apiKey` (ElevenLabs), `voiceScribe.google{Project,Location,Model}` (Google), `voiceScribe.language` (ISO 639-1 code, default "auto")
+Commands: `voiceScribe.toggleRecording`, `configureApiKey`, `selectLanguage`, `selectProvider`, `selectGoogleModel`, `polishLast`, `setRecordingPrefix`, `generateKeyterms`
+Keybindings: `Cmd/Ctrl+Alt+V` toggles recording, `Cmd/Ctrl+Alt+M` picks the Google model, `Cmd/Ctrl+Alt+L` picks the language, `Cmd/Ctrl+Alt+P` polishes
+Configuration: `voiceScribe.provider` (`elevenlabs`|`google`), `voiceScribe.apiKey` (ElevenLabs), `voiceScribe.google{Project,Location,Model}` (Google; `googleModel` defaults to `long`), `voiceScribe.language` (ISO 639-1 code, default "auto"), `voiceScribe.audioChunkMs` (default 20)
 
 ### Testing
 
@@ -76,4 +80,4 @@ Mocha + Sinon with proxyquire for dependency injection. Mock factories for vscod
 
 ### Runtime Dependencies
 
-`ws` (ElevenLabs WebSocket) and `@google-cloud/speech` (Google Chirp 3, bundled into `out/extension.js` by esbuild). Audio capture uses system ffmpeg (must be installed). The Google provider needs gcloud Application Default Credentials.
+`ws` (ElevenLabs WebSocket) and `@google-cloud/speech` (Google Speech-to-Text V2, bundled into `out/extension.js` by esbuild). Audio capture uses system ffmpeg (must be installed). The Google provider needs gcloud Application Default Credentials.

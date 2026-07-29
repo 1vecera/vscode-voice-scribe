@@ -8,6 +8,9 @@ import * as https from 'https';
 const MODELS_DIR = path.join(os.homedir(), '.voicescribe', 'models');
 const RNNOISE_MODEL = 'sh.rnnn';
 
+/** 16 kHz, 16-bit, mono → 32 bytes per millisecond of audio. */
+const BYTES_PER_MS = 32;
+
 /**
  * Native audio capture using ffmpeg
  * Replaces WebView approach which is blocked by VS Code security
@@ -252,35 +255,45 @@ export class AudioCapture {
             throw new Error(`Unsupported platform: ${platform}`);
         }
 
+        // Smaller chunks reach the recognizer sooner. A 100 ms chunk withholds
+        // up to 100 ms of already-captured audio; 20 ms matches the ~60 ms
+        // cadence at which the low-latency models emit results.
+        const chunkMs = Math.max(10, Math.min(200, config.get<number>('audioChunkMs', 20)));
+        const chunkSize = Math.round(BYTES_PER_MS * chunkMs);
+
         return new Promise((resolve, reject) => {
             try {
                 const ffmpegArgs = [
+                    // Don't let the input layer sit on frames waiting to fill a buffer.
+                    '-fflags', 'nobuffer',
                     '-f', inputFormat,
                     '-i', inputDevice,
                     '-ac', '1',
                     '-ar', '16000',
                     ...(afFilter ? ['-af', afFilter] : []),
                     '-f', 's16le',
+                    // Flush each packet to the pipe instead of accumulating in
+                    // the 32 KB AVIO buffer before handing bytes over.
+                    '-flush_packets', '1',
                     'pipe:1'
                 ];
 
                 console.log('Starting ffmpeg with args:', ffmpegArgs.join(' '));
-                
+
                 this.ffmpegProcess = spawn(this.ffmpegPath, ffmpegArgs);
                 this.isRecording = true;
 
                 // Handle stdout - audio data
                 let buffer = Buffer.alloc(0);
-                const chunkSize = 3200; // 100ms at 16kHz/16bit/mono
-                
+
                 this.ffmpegProcess.stdout?.on('data', (data: Buffer) => {
                     buffer = Buffer.concat([buffer, data]);
-                    
-                    // Send chunks as they reach 100ms
+
+                    // Emit fixed-size chunks as soon as enough audio has arrived
                     while (buffer.length >= chunkSize) {
                         const chunk = buffer.subarray(0, chunkSize);
                         buffer = buffer.subarray(chunkSize);
-                        
+
                         if (this.onAudioChunk) {
                             this.onAudioChunk(chunk);
                         }
@@ -311,13 +324,13 @@ export class AudioCapture {
                     }
                 });
 
-                // Small delay to ensure ffmpeg starts
-                setTimeout(() => {
-                    if (this.isRecording) {
-                        vscode.window.showInformationMessage('🎤 Recording started');
-                        resolve();
-                    }
-                }, 100);
+                // Resolve on the real signal that the process is up rather than
+                // a fixed 100 ms guess. A spawn failure still rejects via the
+                // 'error' handler above, which fires instead of 'spawn'.
+                this.ffmpegProcess.once('spawn', () => {
+                    vscode.window.showInformationMessage('🎤 Recording started');
+                    resolve();
+                });
 
             } catch (error) {
                 this.isRecording = false;
