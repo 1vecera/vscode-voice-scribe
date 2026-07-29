@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.1
+
+- Switching the Google model or provider now stops and disposes the active recording before rebuilding services. This prevents orphaned `ffmpeg` microphone captures and the resulting Google stream timeouts.
+- Google responses containing several consecutive interim results are now combined into one live hypothesis, so `long` mode no longer overwrites the editor with isolated fragments.
+- Provider setup checks no longer construct an extra disposable client.
+
 ## 0.6.0
 
 **Google dictation is now near-instant.** First text lands in ~0.85s instead of ~5.6s, and updates arrive every ~60ms instead of every 5s.

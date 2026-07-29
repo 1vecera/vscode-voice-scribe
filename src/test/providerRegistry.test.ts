@@ -37,7 +37,7 @@ describe('providerRegistry', () => {
         const ids = registry.PROVIDERS.map((p: any) => p.id);
         assert.deepStrictEqual(ids.sort(), ['elevenlabs', 'google']);
         for (const p of registry.PROVIDERS) {
-            for (const field of ['id', 'label', 'detail', 'create', 'configure', 'setupHint']) {
+            for (const field of ['id', 'label', 'detail', 'create', 'isConfigured', 'configure', 'setupHint']) {
                 assert.ok(p[field] !== undefined, `${p.id} missing ${field}`);
             }
         }
@@ -68,6 +68,18 @@ describe('providerRegistry', () => {
         sinon.assert.calledWithMatch(GoogleCtor, {
             project: 'proj-x', location: 'us-central1', model: 'chirp_3',
         });
+    });
+
+    it('checks setup without constructing a disposable provider', () => {
+        const elevenlabs = registry.getProvider('elevenlabs');
+        const google = registry.getProvider('google');
+
+        assert.strictEqual(elevenlabs.isConfigured(config()), false);
+        mockVscode._configValues.set('apiKey', 'xi_key');
+        assert.strictEqual(elevenlabs.isConfigured(config()), true);
+        assert.strictEqual(google.isConfigured(config()), true);
+        sinon.assert.notCalled(ElevenLabsCtor);
+        sinon.assert.notCalled(GoogleCtor);
     });
 
     it('google.create defaults location=eu, model=long, project=undefined', () => {

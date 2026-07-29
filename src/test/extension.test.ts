@@ -15,6 +15,9 @@ describe('Extension', () => {
     let ext: any;
     let mockContext: any;
     let mockClaudePolishInstance: any;
+    let MockElevenLabsService: sinon.SinonStub;
+    let MockGoogleSpeechService: sinon.SinonStub;
+    let MockAudioCapture: sinon.SinonStub;
 
     beforeEach(() => {
         mockVscode = createMockVscode();
@@ -53,9 +56,9 @@ describe('Extension', () => {
             dispose: sinon.stub(),
         };
 
-        const MockElevenLabsService = sinon.stub().returns(mockElevenLabsInstance);
-        const MockGoogleSpeechService = sinon.stub().returns(mockGoogleInstance);
-        const MockAudioCapture = sinon.stub().returns(mockAudioCaptureInstance);
+        MockElevenLabsService = sinon.stub().returns(mockElevenLabsInstance);
+        MockGoogleSpeechService = sinon.stub().returns(mockGoogleInstance);
+        MockAudioCapture = sinon.stub().returns(mockAudioCaptureInstance);
 
         mockClaudePolishInstance = {
             polish: sinon.stub().resolves({ polished: 'Polished text.', durationMs: 42 }),
@@ -91,6 +94,7 @@ describe('Extension', () => {
     });
 
     afterEach(() => {
+        ext.deactivate();
         sinon.restore();
     });
 
@@ -345,6 +349,85 @@ describe('Extension', () => {
                 mockVscode._statusBarItem.text,
                 '$(mic) Voice Scribe',
             );
+        });
+
+        it('stops and disposes the active session before switching models', async () => {
+            mockVscode._configValues.set('provider', 'google');
+            const nextGoogleInstance = {
+                startTranscription: sinon.stub().resolves(),
+                stopTranscription: sinon.stub().resolves(''),
+                sendAudioChunk: sinon.stub(),
+                getFullTranscript: sinon.stub().returns(''),
+                dispose: sinon.stub(),
+            };
+            const nextAudioCaptureInstance = {
+                initialize: sinon.stub().resolves(),
+                startRecording: sinon.stub().resolves(),
+                stopRecording: sinon.stub().resolves(),
+                getIsRecording: sinon.stub().returns(false),
+                dispose: sinon.stub(),
+            };
+            MockGoogleSpeechService.onSecondCall().returns(nextGoogleInstance);
+            MockAudioCapture.onSecondCall().returns(nextAudioCaptureInstance);
+
+            ext.activate(mockContext);
+            await registeredCommands['voiceScribe.toggleRecording']();
+
+            const configurationHandler =
+                mockVscode.workspace.onDidChangeConfiguration.firstCall.args[0];
+            await configurationHandler({
+                affectsConfiguration: (key: string) => key === 'voiceScribe.googleModel',
+            });
+
+            sinon.assert.calledOnce(mockAudioCaptureInstance.stopRecording);
+            sinon.assert.calledOnce(mockGoogleInstance.stopTranscription);
+            sinon.assert.calledOnce(mockAudioCaptureInstance.dispose);
+            sinon.assert.calledOnce(mockGoogleInstance.dispose);
+            assert.strictEqual(mockVscode._statusBarItem.text, '$(mic) Voice Scribe');
+
+            await registeredCommands['voiceScribe.toggleRecording']();
+            sinon.assert.calledOnce(nextGoogleInstance.startTranscription);
+            sinon.assert.calledOnce(nextAudioCaptureInstance.startRecording);
+        });
+
+        it('binds each audio capture callback to the provider created with it', async () => {
+            mockVscode._configValues.set('provider', 'google');
+            const nextGoogleInstance = {
+                startTranscription: sinon.stub().resolves(),
+                stopTranscription: sinon.stub().resolves(''),
+                sendAudioChunk: sinon.stub(),
+                getFullTranscript: sinon.stub().returns(''),
+                dispose: sinon.stub(),
+            };
+            const nextAudioCaptureInstance = {
+                initialize: sinon.stub().resolves(),
+                startRecording: sinon.stub().resolves(),
+                stopRecording: sinon.stub().resolves(),
+                getIsRecording: sinon.stub().returns(false),
+                dispose: sinon.stub(),
+            };
+            MockGoogleSpeechService.onSecondCall().returns(nextGoogleInstance);
+            MockAudioCapture.onSecondCall().returns(nextAudioCaptureInstance);
+
+            ext.activate(mockContext);
+            await registeredCommands['voiceScribe.toggleRecording']();
+            await registeredCommands['voiceScribe.toggleRecording']();
+            const oldAudioCallback = mockAudioCaptureInstance.initialize.firstCall.args[0];
+
+            const configurationHandler =
+                mockVscode.workspace.onDidChangeConfiguration.firstCall.args[0];
+            await configurationHandler({
+                affectsConfiguration: (key: string) => key === 'voiceScribe.googleModel',
+            });
+            const nextAudioCallback = nextAudioCaptureInstance.initialize.firstCall.args[0];
+
+            const oldChunk = Buffer.from([1]);
+            const nextChunk = Buffer.from([2]);
+            oldAudioCallback(oldChunk);
+            nextAudioCallback(nextChunk);
+
+            sinon.assert.calledWithExactly(mockGoogleInstance.sendAudioChunk, oldChunk);
+            sinon.assert.calledWithExactly(nextGoogleInstance.sendAudioChunk, nextChunk);
         });
     });
 

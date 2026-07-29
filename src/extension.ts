@@ -11,7 +11,17 @@ let transcriber: TranscriptionProvider | null = null;
 let audioCapture: AudioCapture | null = null;
 let claudePolish: ClaudePolishService | null = null;
 let isRecording = false;
+let isDeactivating = false;
+let lifecycleQueue: Promise<void> = Promise.resolve();
 let statusBarItem: vscode.StatusBarItem;
+
+const SERVICE_CONFIGURATION_KEYS = [
+    'voiceScribe.provider',
+    'voiceScribe.apiKey',
+    'voiceScribe.googleProject',
+    'voiceScribe.googleLocation',
+    'voiceScribe.googleModel',
+];
 
 // ── Paragraph tracking for polish ───────────────────────────────────────────
 // Tracks the span of text accumulated from successive committed transcripts.
@@ -150,6 +160,7 @@ function applyLiveDecoration(editor: vscode.TextEditor, range: vscode.Range) {
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('Voice Scribe extension is now active');
+    isDeactivating = false;
 
     // Create status bar item
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -158,12 +169,12 @@ export function activate(context: vscode.ExtensionContext) {
     updateStatusBar();
 
     // Initialize services
-    initializeServices();
+    lifecycleQueue = initializeServices();
 
     // Register commands
     const toggleRecordingCommand = vscode.commands.registerCommand(
         'voiceScribe.toggleRecording',
-        () => isRecording ? stopRecording() : startRecording()
+        () => enqueueLifecycle(() => isRecording ? stopRecording() : startRecording())
     );
 
     const configureApiKeyCommand = vscode.commands.registerCommand(
@@ -237,37 +248,57 @@ export function activate(context: vscode.ExtensionContext) {
     // Listen for configuration changes
     context.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration(e => {
-            if (e.affectsConfiguration('voiceScribe')) {
-                initializeServices();
+            if (SERVICE_CONFIGURATION_KEYS.some(key => e.affectsConfiguration(key))) {
+                return enqueueLifecycle(initializeServices);
             }
         })
     );
 }
 
-function initializeServices() {
+function enqueueLifecycle(operation: () => Promise<void>): Promise<void> {
+    const pending = lifecycleQueue.then(operation, operation);
+    lifecycleQueue = pending.catch((error) => {
+        console.error('Voice Scribe lifecycle operation failed:', error);
+    });
+    return pending;
+}
+
+async function initializeServices(): Promise<void> {
+    if (isDeactivating) { return; }
+    if (isRecording) {
+        await stopRecording();
+    }
+
+    const previousTranscriber = transcriber;
+    const previousAudioCapture = audioCapture;
+    transcriber = null;
+    audioCapture = null;
+    previousAudioCapture?.dispose();
+    previousTranscriber?.dispose();
+
     const config = vscode.workspace.getConfiguration('voiceScribe');
     const provider = getProvider(config.get<string>('provider', DEFAULT_PROVIDER));
 
-    // Registry decides how to build the provider (and whether it's configured).
-    transcriber = provider.create(config);
+    const nextTranscriber = provider.create(config);
+    if (!nextTranscriber) { return; }
 
-    if (transcriber) {
-        // Do auth / TLS / channel setup now so the toggle keybinding doesn't
-        // pay for it. Never rejects by contract, but guard anyway.
-        transcriber.prewarm?.().catch((error) => {
-            console.error('Provider pre-warm failed:', error);
-        });
+    const nextAudioCapture = new AudioCapture();
+    transcriber = nextTranscriber;
+    audioCapture = nextAudioCapture;
 
-        // Audio pipeline is provider-agnostic (16 kHz/16-bit/mono PCM).
-        audioCapture = new AudioCapture();
-        audioCapture.initialize(async (chunk: Buffer) => {
-            transcriber?.sendAudioChunk(chunk);
-        }).catch((error) => {
-            console.error('Failed to initialize audio capture:', error);
-            // Error already shown to user in AudioCapture.initialize()
-        });
-    } else {
-        audioCapture = null;
+    try {
+        await Promise.all([
+            nextAudioCapture.initialize((chunk: Buffer) => {
+                nextTranscriber.sendAudioChunk(chunk);
+            }),
+            nextTranscriber.prewarm?.() ?? Promise.resolve(),
+        ]);
+    } catch (error) {
+        if (transcriber === nextTranscriber) { transcriber = null; }
+        if (audioCapture === nextAudioCapture) { audioCapture = null; }
+        nextAudioCapture.dispose();
+        nextTranscriber.dispose();
+        console.error('Failed to initialize Voice Scribe services:', error);
     }
 }
 
@@ -292,6 +323,9 @@ async function startRecording() {
         }
         return;
     }
+
+    const sessionTranscriber = transcriber;
+    const sessionAudioCapture = audioCapture;
 
     try {
         // Reset live-rewrite state
@@ -331,7 +365,7 @@ async function startRecording() {
         // of the slower one. Audio captured before the stream is ready is
         // buffered by the provider, so nothing is clipped.
         await Promise.all([
-            transcriber.startTranscription(
+            sessionTranscriber.startTranscription(
                 // ── onPartial ───────────────────────────────────────────
                 // Each partial_transcript is the FULL rewritten hypothesis.
                 // The model rewrites earlier words as context grows.
@@ -349,7 +383,7 @@ async function startRecording() {
                 },
                 autoVocabulary
             ),
-            audioCapture.startRecording(),
+            sessionAudioCapture.startRecording(),
         ]);
 
         isRecording = true;
@@ -367,12 +401,8 @@ async function startRecording() {
         // may have succeeded while the other failed: a live session would leave
         // `isTranscribing` true and make the next attempt throw "Already
         // transcribing", and a live ffmpeg would hold the microphone open.
-        if (transcriber) {
-            await transcriber.stopTranscription().catch(() => { /* ignore */ });
-        }
-        if (audioCapture) {
-            await audioCapture.stopRecording().catch(() => { /* ignore */ });
-        }
+        await sessionTranscriber.stopTranscription().catch(() => { /* ignore */ });
+        await sessionAudioCapture.stopRecording().catch(() => { /* ignore */ });
         await vscode.commands.executeCommand('setContext', 'voiceScribe.recording', false);
         vscode.window.showErrorMessage(`Failed to start recording: ${error}`);
     }
@@ -383,14 +413,17 @@ async function stopRecording() {
         return;
     }
 
+    const sessionTranscriber = transcriber;
+    const sessionAudioCapture = audioCapture;
+
     try {
         stopIdleTimer();
 
         // Stop audio capture first (stops sending chunks)
-        await audioCapture.stopRecording();
+        await sessionAudioCapture.stopRecording();
 
         // Stop the provider — waits for the last committed segment to flush
-        await transcriber.stopTranscription();
+        await sessionTranscriber.stopTranscription();
         isRecording = false;
         updateStatusBar();
 
@@ -824,7 +857,6 @@ async function selectGoogleModel() {
     if (!picked) { return; }
 
     await config.update('googleModel', picked.value, vscode.ConfigurationTarget.Global);
-    initializeServices();
 
     if (picked.unavailable) {
         vscode.window.showWarningMessage(
@@ -860,10 +892,9 @@ async function selectProvider() {
     if (!picked) { return; }
 
     await config.update('provider', picked.value, vscode.ConfigurationTarget.Global);
-    initializeServices();
 
     const provider = getProvider(picked.value);
-    const ready = provider.create(config) !== null;
+    const ready = provider.isConfigured(config);
     vscode.window.showInformationMessage(
         ready
             ? `Voice Scribe: provider set to ${provider.id}.`
@@ -877,7 +908,6 @@ async function configureApiKey() {
     const config = vscode.workspace.getConfiguration('voiceScribe');
     const provider = getProvider(config.get<string>('provider', DEFAULT_PROVIDER));
     await provider.configure(config);
-    initializeServices();
 }
 
 function updateStatusBar() {
@@ -899,12 +929,15 @@ function updateStatusBar() {
 }
 
 export function deactivate() {
+    isDeactivating = true;
     stopIdleTimer();
-    if (transcriber) {
-        transcriber.dispose();
-    }
     if (audioCapture) {
         audioCapture.dispose();
+        audioCapture = null;
+    }
+    if (transcriber) {
+        transcriber.dispose();
+        transcriber = null;
     }
     if (claudePolish) {
         claudePolish.dispose();
