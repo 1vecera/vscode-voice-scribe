@@ -1,0 +1,127 @@
+{
+  "schema_version": "1.0",
+  "repo": "1vecera/vscode-voice-scribe",
+  "collection_mode": "formal_requirements_with_local_tests",
+  "collection_status": "COLLECTED",
+  "inventory_basis": "mocha_test_execution_and_prd_requirements",
+  "source_sha": "9d5cad8e8aed627820796c36731363a5f1a58c53",
+  "snapshot_at": "2026-08-03",
+  "gate_basis": "priority_thresholds",
+  "gate_status": "FAIL",
+  "oracle": {
+    "resolution_mode": "formal_requirements",
+    "confidence": "high",
+    "sources": [
+      "_bmad-output/planning-artifacts/prds/prd-voice-scribe-2026-08-03/prd.md"
+    ],
+    "external_pointer_status": "not_required",
+    "synthetic": false
+  },
+  "target": {
+    "type": "release-scope",
+    "id": "voice-scribe-next-iteration"
+  },
+  "coverage": {
+    "inventory": {
+      "covered": 0,
+      "total": 18,
+      "pct": 0
+    },
+    "priority_breakdown": {
+      "P0": {
+        "covered": 0,
+        "total": 6,
+        "pct": 0
+      },
+      "P1": {
+        "covered": 0,
+        "total": 12,
+        "pct": 0
+      },
+      "P2": {
+        "covered": 0,
+        "total": 0,
+        "pct": null
+      },
+      "P3": {
+        "covered": 0,
+        "total": 0,
+        "pct": null
+      }
+    },
+    "by_level": {
+      "e2e": {
+        "tests": 0,
+        "criteria_covered": 0
+      },
+      "api": {
+        "tests": 0,
+        "criteria_covered": 0
+      },
+      "component": {
+        "tests": 0,
+        "criteria_covered": 0
+      },
+      "unit": {
+        "tests": 182,
+        "criteria_covered": 0
+      },
+      "other": {
+        "tests": 0,
+        "criteria_covered": 0
+      }
+    }
+  },
+  "tests": {
+    "total": 182,
+    "passed": 182,
+    "failed": 0,
+    "skipped": 0,
+    "target_requirement_tests": 0
+  },
+  "risk_summary": {
+    "critical_gaps": 6,
+    "high_gaps": 12,
+    "medium_gaps": 0,
+    "low_gaps": 0,
+    "open_score_9_risks": 3
+  },
+  "heuristics": {
+    "endpoint_gaps": 0,
+    "auth_negative_path_status": "not_applicable_local_extension",
+    "error_path_status": "planned_for_every_external_adapter",
+    "ui_journey_status": "not_implemented",
+    "ui_state_status": "not_implemented"
+  },
+  "gate_criteria": {
+    "p0_required_pct": 100,
+    "p0_actual_pct": 0,
+    "p1_minimum_pct": 80,
+    "p1_target_pct": 90,
+    "p1_actual_pct": 0,
+    "overall_minimum_pct": 80,
+    "overall_actual_pct": 0,
+    "nfr_failures_allowed": 0,
+    "nfr_failures_actual": 1
+  },
+  "blockers": [
+    "next_iteration_not_implemented",
+    "production_dependency_security_fail",
+    "gemini_authentication_unresolved",
+    "task_spec_schema_unresolved",
+    "note_store_policy_unresolved",
+    "projection_pattern_unresolved",
+    "quality_thresholds_unresolved"
+  ],
+  "recommendations": [
+    "Resolve runtime dependency advisories before feature implementation.",
+    "Implement prerequisite characterization and session-core stories with P0 tests.",
+    "Re-run traceability and NFR assessment from actual implementation evidence."
+  ],
+  "links": {
+    "trace_report_path": "_bmad-output/test-artifacts/traceability/traceability-matrix.md",
+    "trace_report_url": "",
+    "artifact_url": "",
+    "journey_evidence_url": ""
+  }
+}

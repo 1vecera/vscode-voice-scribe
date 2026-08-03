@@ -1,0 +1,84 @@
+# generated: 2026-08-03
+# last_updated: 2026-08-03
+# project: voice-scribe
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: _bmad-output/implementation-artifacts
+#
+# Epic flow: backlog → in-progress → done
+# Story flow: backlog → ready-for-dev → in-progress → review → done
+# Retrospectives remain optional until completed.
+# A story becomes ready-for-dev only when bmad-create-story creates its implementation file.
+
+generated: 2026-08-03
+last_updated: 2026-08-03
+project: voice-scribe
+project_key: NOKEY
+tracking_system: file-system
+story_location: _bmad-output/implementation-artifacts
+
+development_status:
+  epic-trustworthy-cleanup: backlog
+  story-baseline-harness: backlog
+  story-secure-runtime-dependencies: backlog
+  story-host-compatibility: backlog
+  story-ffmpeg-capability: backlog
+  story-session-core: backlog
+  story-cleanup-port: backlog
+  story-gemini-adapter: backlog
+  story-cleanup-scheduler: backlog
+  story-ordered-publication: backlog
+  story-live-projection: backlog
+  story-voice-profile: backlog
+  story-output-sinks: backlog
+  story-content-free-diagnostics: backlog
+  epic-trustworthy-cleanup-retrospective: optional
+  epic-shaped-outputs: backlog
+  story-mode-profiles: backlog
+  story-task-spec: backlog
+  epic-shaped-outputs-retrospective: optional
+  epic-optional-memory: backlog
+  story-note-store: backlog
+  story-incognito: backlog
+  story-session-history: backlog
+  epic-optional-memory-retrospective: optional
+
+action_items:
+  decide-gemini-authentication-and-billing:
+    status: open
+    owner: Daniel
+    source: implementation-readiness-report-2026-08-03.md
+    unlocks:
+      - story-gemini-adapter
+  approve-task-spec-schema:
+    status: open
+    owner: Daniel
+    source: implementation-readiness-report-2026-08-03.md
+    unlocks:
+      - story-task-spec
+  decide-note-store-policy:
+    status: open
+    owner: Daniel
+    source: implementation-readiness-report-2026-08-03.md
+    unlocks:
+      - story-note-store
+      - story-session-history
+  choose-live-comparison-pattern:
+    status: open
+    owner: Daniel
+    source: implementation-readiness-report-2026-08-03.md
+    unlocks:
+      - story-live-projection
+  approve-baseline-derived-thresholds:
+    status: open
+    owner: Daniel
+    source: implementation-readiness-report-2026-08-03.md
+    unlocks:
+      - story-cleanup-scheduler
+      - story-voice-profile
+  choose-minimum-vscode-host:
+    status: open
+    owner: Daniel
+    source: implementation-readiness-report-2026-08-03.md
+    unlocks:
+      - story-host-compatibility
