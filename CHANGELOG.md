@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.2
+
+- `Cmd/Ctrl+Alt+V` now works from VS Code chat and prompt inputs. The completed recording is copied to the clipboard and pasted into the focused input when recording stops.
+- Editor dictation stays anchored to the editor and selection where recording began, so changing focus cannot redirect or drop transcript edits.
+- Stopping waits for the final captured audio and queued transcript edits, then commits the final partial hypothesis when a provider does not emit a final result.
+- Failed editor insertions preserve the completed recording on the clipboard instead of losing it.
+
 ## 0.6.1
 
 - Switching the Google model or provider now stops and disposes the active recording before rebuilding services. This prevents orphaned `ffmpeg` microphone captures and the resulting Google stream timeouts.

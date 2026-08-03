@@ -65,6 +65,12 @@ export function createMockVscode() {
             registerCommand: sinon.stub().returns({ dispose: sinon.stub() }),
             executeCommand: sinon.stub().resolves(),
         },
+        env: {
+            clipboard: {
+                readText: sinon.stub().resolves(''),
+                writeText: sinon.stub().resolves(),
+            },
+        },
         StatusBarAlignment: { Left: 1, Right: 2 },
         ConfigurationTarget: { Global: 1, Workspace: 2, WorkspaceFolder: 3 },
         ProgressLocation: { SourceControl: 1, Window: 10, Notification: 15 },

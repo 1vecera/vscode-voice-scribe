@@ -351,6 +351,221 @@ describe('Extension', () => {
             );
         });
 
+        it('pastes a recording into a focused prompt input when stopped', async () => {
+            mockVscode._configValues.set('apiKey', 'test-key');
+            mockVscode._configValues.set('recordingPrefix', 'user note: ');
+            ext.activate(mockContext);
+
+            await registeredCommands['voiceScribe.toggleRecording']({ target: 'paste' });
+            const onFinal = mockElevenLabsInstance.startTranscription.firstCall.args[1];
+            onFinal('hello from dictation');
+
+            await registeredCommands['voiceScribe.toggleRecording']({ target: 'paste' });
+
+            sinon.assert.calledWithExactly(
+                mockVscode.env.clipboard.writeText,
+                'user note: hello from dictation',
+            );
+            sinon.assert.calledWith(
+                mockVscode.commands.executeCommand,
+                'editor.action.clipboardPasteAction',
+            );
+        });
+
+        it('uses the provider transcript when paste mode receives no callback', async () => {
+            mockVscode._configValues.set('apiKey', 'test-key');
+            mockElevenLabsInstance.stopTranscription.resolves('provider fallback');
+            ext.activate(mockContext);
+
+            await registeredCommands['voiceScribe.toggleRecording']({ target: 'paste' });
+            await registeredCommands['voiceScribe.toggleRecording']({ target: 'paste' });
+
+            sinon.assert.calledWithExactly(
+                mockVscode.env.clipboard.writeText,
+                'provider fallback',
+            );
+        });
+
+        it('keeps the final partial after earlier paste-mode commits', async () => {
+            mockVscode._configValues.set('apiKey', 'test-key');
+            mockElevenLabsInstance.stopTranscription.resolves('committed unfinished thought');
+            ext.activate(mockContext);
+
+            await registeredCommands['voiceScribe.toggleRecording']({ target: 'paste' });
+            const onPartial = mockElevenLabsInstance.startTranscription.firstCall.args[0];
+            const onFinal = mockElevenLabsInstance.startTranscription.firstCall.args[1];
+            onFinal('committed');
+            onPartial('unfinished thought');
+            await registeredCommands['voiceScribe.toggleRecording']({ target: 'paste' });
+
+            sinon.assert.calledWithExactly(
+                mockVscode.env.clipboard.writeText,
+                'committed unfinished thought',
+            );
+        });
+
+        it('does not paste a spoken stop command into a prompt', async () => {
+            mockVscode._configValues.set('apiKey', 'test-key');
+            mockVscode._configValues.set('enableVoiceCommands', true);
+            mockElevenLabsInstance.stopTranscription.resolves('stop');
+            ext.activate(mockContext);
+
+            await registeredCommands['voiceScribe.toggleRecording']({ target: 'paste' });
+            const onFinal = mockElevenLabsInstance.startTranscription.firstCall.args[1];
+            onFinal('stop');
+            await flushEditQueue();
+
+            sinon.assert.calledOnce(mockElevenLabsInstance.stopTranscription);
+            sinon.assert.notCalled(mockVscode.env.clipboard.writeText);
+        });
+
+        it('keeps editor insertion anchored when focus moves to another editor', async () => {
+            mockVscode._configValues.set('apiKey', 'test-key');
+            const { editor: originalEditor, editBuilder } = createMockEditor();
+            const { editor: otherEditor } = createMockEditor();
+            mockVscode.window.activeTextEditor = originalEditor;
+            ext.activate(mockContext);
+
+            await registeredCommands['voiceScribe.toggleRecording']({ target: 'editor' });
+            mockVscode.window.activeTextEditor = otherEditor;
+            const onFinal = mockElevenLabsInstance.startTranscription.firstCall.args[1];
+            onFinal('stay in the original editor');
+            await flushEditQueue();
+
+            sinon.assert.calledOnce(originalEditor.edit);
+            sinon.assert.calledWith(
+                editBuilder.insert,
+                originalEditor.selection.active,
+                'stay in the original editor ',
+            );
+            sinon.assert.notCalled(otherEditor.edit);
+        });
+
+        it('drains queued transcript edits before stop resolves', async () => {
+            mockVscode._configValues.set('apiKey', 'test-key');
+            const { editor, editBuilder } = createMockEditor();
+            mockVscode.window.activeTextEditor = editor;
+            ext.activate(mockContext);
+
+            await registeredCommands['voiceScribe.toggleRecording']({ target: 'editor' });
+            const onFinal = mockElevenLabsInstance.startTranscription.firstCall.args[1];
+            onFinal('queued text');
+            await registeredCommands['voiceScribe.toggleRecording']({ target: 'editor' });
+
+            sinon.assert.calledWith(
+                editBuilder.insert,
+                editor.selection.active,
+                'queued text ',
+            );
+        });
+
+        it('commits the latest partial when stop receives no final result', async () => {
+            mockVscode._configValues.set('apiKey', 'test-key');
+            mockElevenLabsInstance.stopTranscription.resolves('');
+            const { editor, editBuilder } = createMockEditor();
+            mockVscode.window.activeTextEditor = editor;
+            ext.activate(mockContext);
+
+            await registeredCommands['voiceScribe.toggleRecording']({ target: 'editor' });
+            const onPartial = mockElevenLabsInstance.startTranscription.firstCall.args[0];
+            onPartial('unfinished thought');
+            await registeredCommands['voiceScribe.toggleRecording']({ target: 'editor' });
+
+            assert.strictEqual(editBuilder.replace.lastCall.args[1], 'unfinished thought ');
+        });
+
+        it('copies the recording when VS Code rejects the editor edit', async () => {
+            mockVscode._configValues.set('apiKey', 'test-key');
+            mockElevenLabsInstance.stopTranscription.resolves('safe fallback');
+            const { editor } = createMockEditor();
+            editor.edit.resolves(false);
+            mockVscode.window.activeTextEditor = editor;
+            ext.activate(mockContext);
+
+            await registeredCommands['voiceScribe.toggleRecording']({ target: 'editor' });
+            const onFinal = mockElevenLabsInstance.startTranscription.firstCall.args[1];
+            onFinal('safe fallback');
+            await registeredCommands['voiceScribe.toggleRecording']({ target: 'editor' });
+
+            sinon.assert.calledWithExactly(mockVscode.env.clipboard.writeText, 'safe fallback');
+            sinon.assert.calledWith(
+                mockVscode.window.showWarningMessage,
+                'Voice Scribe could not insert the recording, so it was copied to the clipboard.',
+            );
+        });
+
+        it('copies the latest partial when its stop-time commit is rejected', async () => {
+            mockVscode._configValues.set('apiKey', 'test-key');
+            mockElevenLabsInstance.stopTranscription.resolves('');
+            const { editor, editBuilder } = createMockEditor();
+            editor.edit.onSecondCall().callsFake((cb: any) => {
+                cb(editBuilder);
+                return Promise.resolve(false);
+            });
+            mockVscode.window.activeTextEditor = editor;
+            ext.activate(mockContext);
+
+            await registeredCommands['voiceScribe.toggleRecording']({ target: 'editor' });
+            const onPartial = mockElevenLabsInstance.startTranscription.firstCall.args[0];
+            onPartial('recover this partial');
+            await registeredCommands['voiceScribe.toggleRecording']({ target: 'editor' });
+
+            sinon.assert.calledWithExactly(
+                mockVscode.env.clipboard.writeText,
+                'recover this partial',
+            );
+        });
+
+        it('replaces the starting selection with prefix and transcript', async () => {
+            mockVscode._configValues.set('apiKey', 'test-key');
+            mockVscode._configValues.set('recordingPrefix', 'note: ');
+            const { editor, editBuilder } = createMockEditor();
+            const selection = {
+                active: { line: 0, character: 5 },
+                isEmpty: false,
+                start: { line: 0, character: 0 },
+                end: { line: 0, character: 5 },
+            };
+            editor.selection = selection;
+            mockVscode.window.activeTextEditor = editor;
+            ext.activate(mockContext);
+
+            await registeredCommands['voiceScribe.toggleRecording']({ target: 'editor' });
+            const onFinal = mockElevenLabsInstance.startTranscription.firstCall.args[1];
+            onFinal('replacement');
+            await flushEditQueue();
+
+            sinon.assert.calledWith(editBuilder.replace, selection, 'note: ');
+            const transcriptInsert = editBuilder.insert.args.find(
+                (args: any[]) => args[1] === 'replacement ',
+            );
+            assert.ok(transcriptInsert, 'expected the transcript after the replacement prefix');
+            assert.strictEqual(transcriptInsert[0].character, 6);
+        });
+
+        it('coalesces concurrent stop requests without restarting', async () => {
+            mockVscode._configValues.set('apiKey', 'test-key');
+            let releaseAudioStop: (() => void) | undefined;
+            mockAudioCaptureInstance.stopRecording.callsFake(
+                () => new Promise<void>(resolve => { releaseAudioStop = resolve; }),
+            );
+            ext.activate(mockContext);
+
+            await registeredCommands['voiceScribe.toggleRecording']();
+            const firstStop = registeredCommands['voiceScribe.toggleRecording']();
+            const secondStop = registeredCommands['voiceScribe.toggleRecording']();
+            for (let attempt = 0; attempt < 10 && !releaseAudioStop; attempt++) {
+                await Promise.resolve();
+            }
+            assert.ok(releaseAudioStop, 'expected the first stop operation to begin');
+            releaseAudioStop();
+            await Promise.all([firstStop, secondStop]);
+
+            sinon.assert.calledOnce(mockAudioCaptureInstance.stopRecording);
+            sinon.assert.calledOnce(mockElevenLabsInstance.stopTranscription);
+            sinon.assert.calledOnce(mockElevenLabsInstance.startTranscription);
+        });
+
         it('stops and disposes the active session before switching models', async () => {
             mockVscode._configValues.set('provider', 'google');
             const nextGoogleInstance = {
@@ -775,7 +990,7 @@ describe('Extension', () => {
 
         it('should not check voice commands when disabled', async () => {
             mockVscode._configValues.set('apiKey', 'test-key');
-            // enableVoiceCommands defaults to false
+            mockVscode._configValues.set('enableVoiceCommands', false);
             ext.activate(mockContext);
 
             const { editor } = createMockEditor();
@@ -875,7 +1090,7 @@ describe('Extension', () => {
 
         it('should not comment in plain mode (default)', async () => {
             mockVscode._configValues.set('apiKey', 'test-key');
-            // insertMode defaults to 'plain'
+            mockVscode._configValues.set('insertMode', 'plain');
             ext.activate(mockContext);
 
             const { editor } = createMockEditor('typescript');
@@ -1081,7 +1296,7 @@ describe('Extension', () => {
 
         it('should not trigger polish when voice commands disabled', async () => {
             mockVscode._configValues.set('apiKey', 'test-key');
-            // enableVoiceCommands defaults to false
+            mockVscode._configValues.set('enableVoiceCommands', false);
             ext.activate(mockContext);
 
             const { editor } = createMockEditor('markdown');

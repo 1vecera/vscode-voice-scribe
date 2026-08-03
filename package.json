@@ -2,7 +2,7 @@
   "name": "voice-scribe",
   "displayName": "Voice Scribe",
   "description": "High-quality real-time voice-to-text for VS Code with live rewriting — ElevenLabs Scribe v2 or Google Cloud Speech-to-Text V2",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "publisher": "1vecera",
   "icon": "images/icon.png",
   "engines": {
@@ -223,11 +223,13 @@
           "default": "editor",
           "enum": [
             "editor",
-            "terminal"
+            "terminal",
+            "paste"
           ],
           "enumDescriptions": [
-            "Insert committed text into the active text editor (default)",
-            "Send committed text to the integrated terminal"
+            "Insert committed text into the editor where recording started (default); prompt and chat inputs paste on stop",
+            "Send committed text to the integrated terminal",
+            "Copy the completed recording to the clipboard and paste it into the focused VS Code input"
           ],
           "description": "Where committed transcriptions are sent."
         },
@@ -289,7 +291,7 @@
         "voiceScribe.recordingPrefix": {
           "type": "string",
           "default": "",
-          "description": "Custom string inserted at the cursor when recording starts (e.g. '// '). Set via the 'Voice Scribe: Set Recording Prefix' command."
+          "description": "Custom string inserted at the editor destination when recording starts, or prepended to paste-mode text when recording stops (e.g. '// '). Set via the 'Voice Scribe: Set Recording Prefix' command."
         },
         "voiceScribe.autoVocabulary": {
           "type": "boolean",
@@ -338,7 +340,19 @@
         "command": "voiceScribe.toggleRecording",
         "key": "ctrl+alt+v",
         "mac": "cmd+alt+v",
-        "when": "editorTextFocus"
+        "when": "editorTextFocus && !inChatInput",
+        "args": {
+          "target": "editor"
+        }
+      },
+      {
+        "command": "voiceScribe.toggleRecording",
+        "key": "ctrl+alt+v",
+        "mac": "cmd+alt+v",
+        "when": "inChatInput || (inputFocus && !editorTextFocus)",
+        "args": {
+          "target": "paste"
+        }
       },
       {
         "command": "voiceScribe.polishLast",

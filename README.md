@@ -9,6 +9,7 @@
 - **Two transcription providers** — switch between **ElevenLabs Scribe v2** (API key) and **Google Cloud Speech-to-Text V2** (gcloud Application Default Credentials, no key) with one command. Same live-rewrite editor experience either way. See [Providers](#providers).
 - **Live rewriting** — partial transcripts replace the "live zone" (dotted underline) in your editor as the model refines its hypothesis; text corrects itself as you speak
 - **Toggle recording** — `Cmd+Alt+V` / `Ctrl+Alt+V` starts and stops with one shortcut
+- **Prompt-field paste** — start recording from a chat or prompt input and the completed transcript is pasted there when you stop
 - **VAD auto-commit** — voice activity detection automatically commits text when you pause speaking
 - **Idle auto-stop** — recording stops automatically after 2 minutes of silence so you never forget to turn it off
 - **34 languages** — English, Chinese, Spanish, Hindi, Portuguese, Russian, Japanese, German, French, Italian, Korean, and [23 more](#supported-languages). Defaults to auto-detect.
@@ -82,10 +83,10 @@ code --install-extension voice-scribe-*.vsix
 
 ## Usage
 
-1. **Configure API key** — `Cmd+Shift+P` → *Voice Scribe: Configure API Key*
-2. **Start recording** — `Cmd+Alt+V` (macOS) / `Ctrl+Alt+V` (Windows/Linux)
-3. **Speak** — text appears and rewrites in real time
-4. **Stop recording** — press the same shortcut again, or say "stop"
+- **Configure API key** — `Cmd+Shift+P` → *Voice Scribe: Configure API Key*
+- **Start recording** — `Cmd+Alt+V` (macOS) / `Ctrl+Alt+V` (Windows/Linux)
+- **Speak** — in a file editor, text appears and rewrites in real time; in a chat or prompt field, recording continues without live text
+- **Stop recording** — press the same shortcut again, or say "stop"; prompt-field recordings are pasted at this point
 
 The status bar shows a microphone icon that turns red while recording.
 
@@ -161,7 +162,7 @@ All settings are under `voiceScribe.*` in your VS Code settings.
 | `insertMode` | `"smart"` | `"plain"` = as-is, `"comment"` = always wrap in line comment, `"smart"` = auto-comment in code, plain in prose |
 | `removeFiller` | `true` | Strip filler words (um, uh, hmm, mhm) from transcriptions |
 | `enableVoiceCommands` | `true` | Execute voice commands instead of typing them |
-| `target` | `"editor"` | `"editor"` = insert into active editor, `"terminal"` = send to integrated terminal |
+| `target` | `"editor"` | `"editor"` = live insertion in the editor where recording starts and paste-on-stop in prompt fields, `"terminal"` = send to the integrated terminal, `"paste"` = always paste on stop |
 | `vadSensitivity` | `"medium"` | VAD preset: `"low"` (noisy), `"medium"` (normal), `"high"` (quiet) |
 | `autoVocabulary` | `true` | Auto-extract identifiers from open files and boost in recognition |
 | `customVocabulary` | `[]` | Custom terms to boost. See [Custom Vocabulary](#custom-vocabulary). |

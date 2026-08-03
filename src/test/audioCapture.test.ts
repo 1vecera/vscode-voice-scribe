@@ -216,7 +216,7 @@ describe('AudioCapture', () => {
     // ── stopRecording ──────────────────────────────────────────────────
 
     describe('stopRecording', () => {
-        it('should send q to stdin and kill process with SIGTERM', async () => {
+        it('should send q and resolve after ffmpeg closes', async () => {
             const initProc = createMockChildProcess();
             const recordProc = createMockChildProcess();
             mockSpawn.onFirstCall().returns(initProc);
@@ -228,10 +228,83 @@ describe('AudioCapture', () => {
             await initPromise;
 
             await ac.startRecording();
-            await ac.stopRecording();
+            const stopPromise = ac.stopRecording();
 
             sinon.assert.calledWith(recordProc.stdin.write, 'q');
-            sinon.assert.calledWith(recordProc.kill, 'SIGTERM');
+            sinon.assert.notCalled(recordProc.kill);
+
+            recordProc.emit('close', 0);
+            await stopPromise;
+        });
+
+        it('should terminate ffmpeg when graceful stop times out', async () => {
+            const initProc = createMockChildProcess();
+            const recordProc = createMockChildProcess();
+            mockSpawn.onFirstCall().returns(initProc);
+            mockSpawn.onSecondCall().returns(recordProc);
+
+            const ac = new AudioCaptureClass();
+            const initPromise = ac.initialize(sinon.stub());
+            initProc.emit('close', 0);
+            await initPromise;
+            await ac.startRecording();
+
+            const clock = sinon.useFakeTimers();
+            try {
+                const stopPromise = ac.stopRecording();
+                clock.tick(100);
+
+                sinon.assert.calledWith(recordProc.kill, 'SIGTERM');
+                recordProc.emit('close', 0);
+                await stopPromise;
+            } finally {
+                clock.restore();
+            }
+        });
+
+        it('should flush the final audio buffer before stop resolves', async () => {
+            const initProc = createMockChildProcess();
+            const recordProc = createMockChildProcess();
+            mockSpawn.onFirstCall().returns(initProc);
+            mockSpawn.onSecondCall().returns(recordProc);
+
+            const chunks: Buffer[] = [];
+            const ac = new AudioCaptureClass();
+            const initPromise = ac.initialize((chunk: Buffer) => chunks.push(chunk));
+            initProc.emit('close', 0);
+            await initPromise;
+            await ac.startRecording();
+
+            recordProc.stdout.emit('data', Buffer.alloc(300));
+            const stopPromise = ac.stopRecording();
+            assert.strictEqual(chunks.length, 0);
+
+            recordProc.emit('close', 0);
+            await stopPromise;
+
+            assert.strictEqual(chunks.length, 1);
+            assert.strictEqual(chunks[0].length, 300);
+        });
+
+        it('should share one pending stop operation', async () => {
+            const initProc = createMockChildProcess();
+            const recordProc = createMockChildProcess();
+            mockSpawn.onFirstCall().returns(initProc);
+            mockSpawn.onSecondCall().returns(recordProc);
+
+            const ac = new AudioCaptureClass();
+            const initPromise = ac.initialize(sinon.stub());
+            initProc.emit('close', 0);
+            await initPromise;
+            await ac.startRecording();
+
+            const firstStop = ac.stopRecording();
+            const secondStop = ac.stopRecording();
+            recordProc.emit('close', 0);
+            await Promise.all([firstStop, secondStop]);
+
+            sinon.assert.calledOnce(recordProc.stdin.write);
+            sinon.assert.notCalled(recordProc.kill);
         });
 
         it('should do nothing if not recording', async () => {
