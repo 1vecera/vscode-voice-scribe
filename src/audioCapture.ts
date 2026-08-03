@@ -14,6 +14,7 @@ export class AudioCapture {
     private isRecording = false;
     private onAudioChunk: ((chunk: Buffer) => void) | null = null;
     private ffmpegPath: string = 'ffmpeg';
+    private stopPromise: Promise<void> | null = null;
 
     /**
      * Resolve the full path to ffmpeg.
@@ -254,27 +255,45 @@ export class AudioCapture {
     }
 
     async stopRecording(): Promise<void> {
+        if (this.stopPromise) {
+            return this.stopPromise;
+        }
         if (!this.isRecording || !this.ffmpegProcess) {
             return;
         }
 
-        return new Promise((resolve) => {
-            if (this.ffmpegProcess) {
-                // Send 'q' to ffmpeg to quit gracefully
-                this.ffmpegProcess.stdin?.write('q');
-                
-                // Give it a moment to flush
-                setTimeout(() => {
-                    this.ffmpegProcess?.kill('SIGTERM');
+        const process = this.ffmpegProcess;
+        const pending = new Promise<void>((resolve) => {
+            let settled = false;
+            const timers: Array<ReturnType<typeof setTimeout>> = [];
+
+            const finish = () => {
+                if (settled) { return; }
+                settled = true;
+                timers.forEach(clearTimeout);
+                if (this.ffmpegProcess === process) {
                     this.ffmpegProcess = null;
-                    this.isRecording = false;
-                    vscode.window.showInformationMessage('🎤 Recording stopped');
-                    resolve();
-                }, 100);
-            } else {
+                }
+                this.isRecording = false;
+                vscode.window.showInformationMessage('🎤 Recording stopped');
                 resolve();
-            }
+            };
+
+            // The recording-time close listener flushes its remaining PCM
+            // buffer before this later listener resolves stopRecording().
+            process.once('close', finish);
+            process.once('error', finish);
+            timers.push(setTimeout(() => {
+                process.kill('SIGTERM');
+            }, 100));
+            timers.push(setTimeout(finish, 1_100));
+            process.stdin?.write('q');
         });
+
+        this.stopPromise = pending.finally(() => {
+            this.stopPromise = null;
+        });
+        return this.stopPromise;
     }
 
     getIsRecording(): boolean {

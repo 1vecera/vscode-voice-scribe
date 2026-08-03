@@ -13,7 +13,21 @@ let claudePolish: ClaudePolishService | null = null;
 let isRecording = false;
 let isDeactivating = false;
 let lifecycleQueue: Promise<void> = Promise.resolve();
+let stoppingPromise: Promise<void> | null = null;
 let statusBarItem: vscode.StatusBarItem;
+
+type RecordingTarget = 'editor' | 'terminal' | 'paste';
+type RecordingInvocation = { target?: 'editor' | 'paste' };
+
+let recordingTarget: RecordingTarget = 'editor';
+let recordingEditor: vscode.TextEditor | null = null;
+let recordingSelection: vscode.Selection | null = null;
+let recordingPrefix = '';
+let acceptedSegments: string[] = [];
+let latestPartialText = '';
+let sessionProducedOutput = false;
+let sessionHandledCommand = false;
+let sessionEditError: Error | null = null;
 
 const SERVICE_CONFIGURATION_KEYS = [
     'voiceScribe.provider',
@@ -36,7 +50,6 @@ let isPolishing = false;
 // Tracks the "live zone" — the range of text currently being rewritten by
 // incoming partial_transcript messages.  committed_transcript locks it in.
 
-let liveStart: vscode.Position | null = null;   // anchor: where partial text begins
 let liveRange: vscode.Range | null = null;       // current extent of partial text
 let editQueue: Promise<void> = Promise.resolve(); // serialises editor mutations
 
@@ -53,7 +66,24 @@ const liveDecorationType = vscode.window.createTextEditorDecorationType({
 
 /** Enqueue an editor mutation so they never overlap. */
 function enqueueEdit(fn: () => Promise<void>) {
-    editQueue = editQueue.then(fn, fn);      // run even if prev rejected
+    const pending = editQueue.then(fn, fn);
+    editQueue = pending.catch(error => {
+        rememberEditorError(error);
+        console.error('Voice Scribe editor insertion failed:', error);
+    });
+}
+
+function rememberEditorError(error: unknown): void {
+    sessionEditError = error instanceof Error ? error : new Error(String(error));
+}
+
+async function commitStopFallback(text: string): Promise<void> {
+    try {
+        await handleCommitted(text);
+    } catch (error) {
+        rememberEditorError(error);
+        console.error('Voice Scribe stop-time insertion failed:', error);
+    }
 }
 
 function resetIdleTimer() {
@@ -81,7 +111,7 @@ function startIdleTimer() {
         if (idleMs >= IDLE_TIMEOUT_MS && isRecording) {
             stopIdleTimer();
             vscode.window.showInformationMessage('Voice Scribe: auto-stopped after 2 minutes of silence.');
-            stopRecording();
+            void enqueueLifecycle(stopRecording);
         }
     }, 1_000);
 }
@@ -123,8 +153,11 @@ function getVoiceCommands(): Record<string, () => any> {
         'select all':     () => vscode.commands.executeCommand('editor.action.selectAll'),
         'save':           () => vscode.commands.executeCommand('workbench.action.files.save'),
         'save file':      () => vscode.commands.executeCommand('workbench.action.files.save'),
-        'stop':           () => stopRecording(),
-        'stop recording': () => stopRecording(),
+        // Schedule the lifecycle operation after this transcript edit finishes.
+        // Awaiting stopRecording from inside editQueue would deadlock because stop
+        // waits for the queue to drain before it finalizes the recording.
+        'stop':           () => { void enqueueLifecycle(stopRecording); },
+        'stop recording': () => { void enqueueLifecycle(stopRecording); },
     };
 }
 
@@ -173,8 +206,12 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Register commands
     const toggleRecordingCommand = vscode.commands.registerCommand(
-        'voiceScribe.toggleRecording',
-        () => enqueueLifecycle(() => isRecording ? stopRecording() : startRecording())
+        'voiceScribe.toggleRecording', (invocation?: RecordingInvocation) => {
+            const shouldStop = isRecording || stoppingPromise !== null;
+            return enqueueLifecycle(
+                () => shouldStop ? stopRecording() : startRecording(invocation)
+            );
+        }
     );
 
     const configureApiKeyCommand = vscode.commands.registerCommand(
@@ -302,7 +339,77 @@ async function initializeServices(): Promise<void> {
     }
 }
 
-async function startRecording() {
+function prepareRecordingDestination(invocation?: RecordingInvocation): void {
+    const config = vscode.workspace.getConfiguration('voiceScribe');
+    const configuredTarget = config.get<RecordingTarget>('target', 'editor');
+
+    recordingTarget = configuredTarget === 'editor'
+        ? invocation?.target ?? 'editor'
+        : configuredTarget;
+    recordingEditor = recordingTarget === 'editor'
+        ? vscode.window.activeTextEditor ?? null
+        : null;
+
+    // Commands launched from a prompt or chat input have no text editor. In
+    // that case, retain the focused input and paste the completed recording.
+    if (recordingTarget === 'editor' && !recordingEditor) {
+        recordingTarget = 'paste';
+    }
+
+    recordingSelection = recordingEditor?.selection ?? null;
+    recordingPrefix = config.get<string>('recordingPrefix', '');
+    acceptedSegments = [];
+    latestPartialText = '';
+    sessionProducedOutput = false;
+    sessionHandledCommand = false;
+    sessionEditError = null;
+}
+
+function resetRecordingDestination(): void {
+    recordingTarget = 'editor';
+    recordingEditor = null;
+    recordingSelection = null;
+    recordingPrefix = '';
+    acceptedSegments = [];
+    latestPartialText = '';
+    sessionProducedOutput = false;
+    sessionHandledCommand = false;
+    sessionEditError = null;
+}
+
+async function pasteRecordedText(text: string): Promise<void> {
+    await vscode.env.clipboard.writeText(text);
+    try {
+        await vscode.commands.executeCommand('editor.action.clipboardPasteAction');
+        vscode.window.setStatusBarMessage('$(check) Voice Scribe: recording pasted', 3_000);
+    } catch (error) {
+        console.error('Voice Scribe could not invoke Paste:', error);
+        vscode.window.showInformationMessage(
+            'Voice Scribe: recording copied to the clipboard. Paste it with Cmd/Ctrl+V.'
+        );
+    }
+}
+
+function transcriptForFallback(providerTranscript: string): string {
+    const committed = acceptedSegments.join(' ').trim();
+    const body = committed || (
+        sessionHandledCommand ? '' : latestPartialText || removeFiller(providerTranscript)
+    );
+    return body ? recordingPrefix + body : '';
+}
+
+function transcriptForEditorRecovery(providerTranscript: string): string {
+    const committed = acceptedSegments.join(' ').trim();
+    const trailingPartial = latestPartialText && !committed.endsWith(latestPartialText)
+        ? latestPartialText
+        : '';
+    const body = [committed, trailingPartial].filter(Boolean).join(' ') || (
+        sessionHandledCommand ? '' : removeFiller(providerTranscript)
+    );
+    return body ? recordingPrefix + body : '';
+}
+
+async function startRecording(invocation?: RecordingInvocation) {
     if (isRecording) {
         vscode.window.showWarningMessage('Already recording!');
         return;
@@ -329,21 +436,35 @@ async function startRecording() {
 
     try {
         // Reset live-rewrite state
-        liveStart = null;
         liveRange = null;
         editQueue = Promise.resolve();
         clearLiveDecoration(vscode.window.activeTextEditor);
 
+        prepareRecordingDestination(invocation);
+
         // Insert recording prefix at cursor, if configured
-        const prefix = vscode.workspace.getConfiguration('voiceScribe').get<string>('recordingPrefix', '');
-        if (prefix) {
-            const editor = vscode.window.activeTextEditor;
-            if (editor) {
-                await editor.edit(b => b.insert(editor.selection.active, prefix));
+        if (recordingTarget === 'editor' && recordingEditor && recordingPrefix) {
+            const prefixSelection = recordingSelection ?? recordingEditor.selection;
+            const prefixStart = prefixSelection.isEmpty
+                ? prefixSelection.active
+                : prefixSelection.start;
+            const applied = await recordingEditor.edit(b => {
+                if (prefixSelection.isEmpty) {
+                    b.insert(prefixStart, recordingPrefix);
+                } else {
+                    b.replace(prefixSelection, recordingPrefix);
+                }
+            });
+            if (!applied) {
+                throw new Error('VS Code rejected the recording-prefix edit');
             }
+            const prefixEnd = recordingEditor.document.positionAt(
+                recordingEditor.document.offsetAt(prefixStart) + recordingPrefix.length
+            );
+            recordingSelection = new vscode.Selection(prefixEnd, prefixEnd);
         }
 
-        // Auto-populate vocabulary from workspace (Task 10).
+        // Auto-populate vocabulary from workspace.
         // Only for providers that actually consume it — extraction runs a
         // DocumentSymbolProvider, which can block on a cold language server,
         // and that must not sit on the recording-start path for nothing.
@@ -404,14 +525,28 @@ async function startRecording() {
         await sessionTranscriber.stopTranscription().catch(() => { /* ignore */ });
         await sessionAudioCapture.stopRecording().catch(() => { /* ignore */ });
         await vscode.commands.executeCommand('setContext', 'voiceScribe.recording', false);
+        resetRecordingDestination();
         vscode.window.showErrorMessage(`Failed to start recording: ${error}`);
     }
 }
 
-async function stopRecording() {
-    if (!isRecording || !transcriber || !audioCapture) {
-        return;
+function stopRecording(): Promise<void> {
+    if (stoppingPromise) {
+        return stoppingPromise;
     }
+    if (!isRecording || !transcriber || !audioCapture) {
+        return Promise.resolve();
+    }
+
+    const pending = performStopRecording();
+    stoppingPromise = pending.finally(() => {
+        stoppingPromise = null;
+    });
+    return stoppingPromise;
+}
+
+async function performStopRecording(): Promise<void> {
+    if (!transcriber || !audioCapture) { return; }
 
     const sessionTranscriber = transcriber;
     const sessionAudioCapture = audioCapture;
@@ -422,14 +557,44 @@ async function stopRecording() {
         // Stop audio capture first (stops sending chunks)
         await sessionAudioCapture.stopRecording();
 
-        // Stop the provider — waits for the last committed segment to flush
-        await sessionTranscriber.stopTranscription();
+        // Stop the provider, then wait for every transcript callback it emitted
+        // to finish mutating the editor before clearing the session state.
+        const providerTranscript = await sessionTranscriber.stopTranscription();
+        await editQueue;
+
+        if (!sessionEditError && latestPartialText && !sessionHandledCommand) {
+            await commitStopFallback(latestPartialText);
+        } else if (!sessionEditError && !sessionProducedOutput && !sessionHandledCommand) {
+            const fallbackText = removeFiller(providerTranscript);
+            if (fallbackText) {
+                await commitStopFallback(fallbackText);
+            }
+        }
+
+        if (recordingTarget === 'paste') {
+            const text = transcriptForFallback(providerTranscript);
+            if (text) {
+                await pasteRecordedText(text);
+            } else if (!sessionHandledCommand) {
+                vscode.window.showWarningMessage('Voice Scribe: no speech was transcribed');
+            }
+        } else if (sessionEditError) {
+            const text = transcriptForEditorRecovery(providerTranscript);
+            if (text) {
+                await vscode.env.clipboard.writeText(text);
+            }
+            vscode.window.showWarningMessage(
+                text
+                    ? 'Voice Scribe could not insert the recording, so it was copied to the clipboard.'
+                    : `Voice Scribe could not insert the recording: ${sessionEditError.message}`
+            );
+        }
+
         isRecording = false;
         updateStatusBar();
 
         // Clear live state
-        clearLiveDecoration(vscode.window.activeTextEditor);
-        liveStart = null;
+        clearLiveDecoration(recordingEditor ?? vscode.window.activeTextEditor);
         liveRange = null;
 
         // Preserve paragraph span across stop/start so users can say "stop" then
@@ -439,16 +604,16 @@ async function stopRecording() {
         // Clear context for keybinding
         await vscode.commands.executeCommand('setContext', 'voiceScribe.recording', false);
 
-        // Note: we do NOT re-insert finalText here.
-        // The onFinal callback already inserted each committed segment in real-time.
-        // stopTranscription() just waits for any last VAD commit to flush through
-        // the same callback pipeline.
     } catch (error) {
         isRecording = false;
         stopIdleTimer();
         updateStatusBar();
         await vscode.commands.executeCommand('setContext', 'voiceScribe.recording', false);
         vscode.window.showErrorMessage(`Failed to stop recording: ${error}`);
+    } finally {
+        clearLiveDecoration(recordingEditor ?? vscode.window.activeTextEditor);
+        liveRange = null;
+        resetRecordingDestination();
     }
 }
 
@@ -460,35 +625,40 @@ async function stopRecording() {
  * words ("I wanted" → "I want to book").  We replace the entire live zone.
  */
 async function handlePartial(text: string) {
-    const editor = vscode.window.activeTextEditor;
-    if (!editor) { return; }
-
-    // Apply filler removal (Task 3)
     text = removeFiller(text);
     if (!text) { return; }
+    latestPartialText = text;
+    sessionHandledCommand = false;
+    if (recordingTarget !== 'editor') { return; }
+    const editor = recordingEditor;
+    if (!editor) {
+        throw new Error('The editor selected for this recording is no longer available');
+    }
+
+    const initialSelection = recordingSelection ?? editor.selection;
+    const replaceRange = liveRange ?? (!initialSelection.isEmpty ? initialSelection : null);
+    const start = replaceRange?.start ?? initialSelection.active;
 
     const ok = await editor.edit(editBuilder => {
-        if (liveRange) {
-            // Replace existing live zone with the updated hypothesis
-            editBuilder.replace(liveRange, text);
+        if (replaceRange) {
+            editBuilder.replace(replaceRange, text);
         } else {
-            // First partial of a new segment — insert at cursor
-            liveStart = editor.selection.active;
-            editBuilder.insert(liveStart, text);
+            editBuilder.insert(start, text);
         }
     });
 
-    if (ok) {
-        // Recalculate live range after edit
-        const start = liveStart ?? editor.selection.active;
-        const end = editor.document.positionAt(
-            editor.document.offsetAt(start) + text.length
-        );
-        liveRange = new vscode.Range(start, end);
-
-        // Dim italic decoration so user sees this is "live / unconfirmed"
-        applyLiveDecoration(editor, liveRange);
+    if (!ok) {
+        throw new Error('VS Code rejected a live transcript edit');
     }
+
+    const end = editor.document.positionAt(
+        editor.document.offsetAt(start) + text.length
+    );
+    liveRange = new vscode.Range(start, end);
+    recordingSelection = new vscode.Selection(end, end);
+
+    // Dim italic decoration so user sees this is "live / unconfirmed"
+    applyLiveDecoration(editor, liveRange);
 }
 
 /**
@@ -499,33 +669,25 @@ async function handlePartial(text: string) {
  * Flow: filler removal → voice commands → terminal target → editor insert → auto-comment
  */
 async function handleCommitted(text: string) {
-    const editor = vscode.window.activeTextEditor;
-    if (!editor) {
-        vscode.window.showWarningMessage('No active editor to insert text');
-        return;
-    }
-
     const config = vscode.workspace.getConfiguration('voiceScribe');
 
-    // 1. Apply filler removal (Task 3)
     let processedText = removeFiller(text);
     if (!processedText) {
-        // Filler removal left nothing — clear live state and skip
-        clearLiveDecoration(editor);
-        liveStart = null;
+        clearLiveDecoration(recordingEditor ?? undefined);
         liveRange = null;
+        latestPartialText = '';
         return;
     }
 
-    // 2. Check voice commands (Task 5) — may return early
-    if (config.get<boolean>('enableVoiceCommands', false)) {
+    if (config.get<boolean>('enableVoiceCommands', true)) {
         const normalized = normalizeForCommand(processedText);
 
         // Polish triggers — invoke Claude Code on the last paragraph
         if (POLISH_TRIGGERS.has(normalized)) {
-            liveStart = null;
+            sessionHandledCommand = true;
             liveRange = null;
-            clearLiveDecoration(editor);
+            latestPartialText = '';
+            clearLiveDecoration(recordingEditor ?? undefined);
             polishLast().catch(err => {
                 vscode.window.showErrorMessage(`Voice Scribe: polish failed — ${err.message}`);
             });
@@ -535,10 +697,11 @@ async function handleCommitted(text: string) {
         // Exact match commands
         const commands = getVoiceCommands();
         if (commands[normalized]) {
+            sessionHandledCommand = true;
             await commands[normalized]();
-            liveStart = null;
             liveRange = null;
-            clearLiveDecoration(editor);
+            latestPartialText = '';
+            clearLiveDecoration(recordingEditor ?? undefined);
             return; // Don't insert text
         }
 
@@ -552,69 +715,80 @@ async function handleCommitted(text: string) {
         }
     }
 
-    // 3. Check terminal target (Task 6) — may return early
-    const target = config.get<string>('target', 'editor');
-    if (target === 'terminal') {
+    sessionHandledCommand = false;
+    acceptedSegments.push(processedText);
+
+    if (recordingTarget === 'paste') {
+        latestPartialText = '';
+        sessionProducedOutput = true;
+        return;
+    }
+
+    if (recordingTarget === 'terminal') {
         await vscode.commands.executeCommand(
             'workbench.action.terminal.sendSequence',
             { text: processedText + '\n' }
         );
-        // Clear live state (partial was in editor, but committed goes to terminal)
-        clearLiveDecoration(editor);
-        liveStart = null;
+        latestPartialText = '';
+        sessionProducedOutput = true;
+        clearLiveDecoration(recordingEditor ?? undefined);
         liveRange = null;
         return;
     }
 
-    // 4. Insert text into editor (existing logic)
+    const editor = recordingEditor;
+    if (!editor) {
+        throw new Error('The editor selected for this recording is no longer available');
+    }
+
     const finalText = processedText + ' ';
+    const initialSelection = recordingSelection ?? editor.selection;
 
     // Track where the insertion starts for auto-comment
     const insertStart = liveRange
         ? liveRange.start
-        : editor.selection.isEmpty
-            ? editor.selection.active
-            : editor.selection.start;
+        : initialSelection.isEmpty
+            ? initialSelection.active
+            : initialSelection.start;
 
-    await editor.edit(editBuilder => {
+    const applied = await editor.edit(editBuilder => {
         if (liveRange) {
             editBuilder.replace(liveRange, finalText);
-        } else if (editor.selection.isEmpty) {
-            editBuilder.insert(editor.selection.active, finalText);
+        } else if (initialSelection.isEmpty) {
+            editBuilder.insert(initialSelection.active, finalText);
         } else {
-            editBuilder.replace(editor.selection, finalText);
+            editBuilder.replace(initialSelection, finalText);
         }
     });
+    if (!applied) {
+        throw new Error('VS Code rejected the committed transcript edit');
+    }
 
-    // 5. Apply auto-comment (Task 1) — after editor insertion
-    const insertMode = config.get<string>('insertMode', 'plain');
+    latestPartialText = '';
+    sessionProducedOutput = true;
+    let insertEnd = editor.document.positionAt(
+        editor.document.offsetAt(insertStart) + finalText.length
+    );
+
+    const insertMode = config.get<string>('insertMode', 'smart');
     if (insertMode === 'comment' || insertMode === 'smart') {
         const shouldComment = insertMode === 'comment' || !isProseLanguage(editor.document.languageId);
-        if (shouldComment) {
+        if (shouldComment && vscode.window.activeTextEditor === editor) {
             // Select the inserted range, then toggle line comment
-            const insertEnd = editor.document.positionAt(
-                editor.document.offsetAt(insertStart) + finalText.length
-            );
             editor.selection = new vscode.Selection(insertStart, insertEnd);
             await vscode.commands.executeCommand('editor.action.addCommentLine');
+            insertEnd = editor.selection.end;
         }
     }
 
-    // 6. Track paragraph range for polish (Claude Code integration)
-    //    Extend the paragraph on each commit; reset happens elsewhere
-    //    (polishLast, stopRecording, or cursor moved outside the span).
-    const paragraphInsertEnd = editor.document.positionAt(
-        editor.document.offsetAt(insertStart) + finalText.length
-    );
     if (!paragraphStart || paragraphDocUri?.toString() !== editor.document.uri.toString()) {
         paragraphStart = insertStart;
         paragraphDocUri = editor.document.uri;
     }
-    paragraphEnd = paragraphInsertEnd;
+    paragraphEnd = insertEnd;
+    recordingSelection = new vscode.Selection(insertEnd, insertEnd);
 
-    // 7. Clear decorations and reset for next segment
     clearLiveDecoration(editor);
-    liveStart = null;
     liveRange = null;
 }
 
