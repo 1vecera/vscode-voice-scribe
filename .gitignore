@@ -6,6 +6,9 @@ out/
 .DS_Store
 credentials/
 .github/agents/
-.claude/
+.claude/*
+!.claude/skills/
+!.claude/skills/**
+_bmad/config.user.toml
 tmp/
 backlog.md

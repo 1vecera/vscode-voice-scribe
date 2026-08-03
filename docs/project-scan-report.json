@@ -1,0 +1,69 @@
+{
+  "scan_kind": "bmad_brownfield_exhaustive",
+  "scan_status": "complete",
+  "scanned_at": "2026-08-03",
+  "product_version": "0.6.1",
+  "repository_type": "single_package_vscode_extension",
+  "project_parts": [
+    {
+      "id": "vscode_extension",
+      "root": ".",
+      "classification": "extension",
+      "architecture": "event_driven_streaming_monolith"
+    }
+  ],
+  "completed_scan_activities": [
+    "classified_repository",
+    "read_existing_documentation",
+    "inventoried_source_and_tests",
+    "inspected_runtime_entrypoint",
+    "inspected_provider_contracts",
+    "inspected_external_integrations",
+    "inspected_build_and_ci",
+    "inspected_release_history",
+    "mapped_components_and_data_flow",
+    "generated_brownfield_knowledge_base"
+  ],
+  "source_inventory": {
+    "typescript_files": 19,
+    "test_files": 9,
+    "automated_tests": 182,
+    "internal_http_apis": 0,
+    "databases": 0,
+    "ci_workflows": 1
+  },
+  "entry_points": [
+    "src/extension.ts",
+    ".github/workflows/ci.yml",
+    "package.json"
+  ],
+  "high_change_risk_areas": [
+    "src/extension.ts",
+    "src/googleSpeechService.ts",
+    "src/audioCapture.ts"
+  ],
+  "external_boundaries": [
+    "vscode_extension_host",
+    "ffmpeg_process",
+    "elevenlabs_websocket",
+    "google_speech_grpc",
+    "claude_code_process"
+  ],
+  "generated_documents": [
+    "docs/index.md",
+    "docs/project-overview.md",
+    "docs/source-tree-analysis.md",
+    "docs/architecture.md",
+    "docs/integration-architecture.md",
+    "docs/component-inventory.md",
+    "docs/development-guide.md",
+    "docs/deployment-guide.md"
+  ],
+  "known_evidence_gaps": [
+    "no_live_provider_tests_in_ci",
+    "no_real_microphone_tests_in_ci",
+    "no_vscode_extension_host_tests_in_ci",
+    "no_continuous_performance_regression_gate",
+    "no_provider_retention_evidence_owned_by_repository"
+  ]
+}

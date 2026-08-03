@@ -17,4 +17,8 @@ backlog.md
 CLAUDE.md
 tmp/**
 .claude/**
+.agents/**
+_bmad/**
+_bmad-output/**
+docs/**
 *.vsix

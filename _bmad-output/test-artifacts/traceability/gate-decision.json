@@ -1,0 +1,15 @@
+{
+  "evaluated_at": "2026-08-03",
+  "gate_basis": "priority_thresholds_and_nfr_evidence",
+  "gate_status": "FAIL",
+  "rationale": "P0, P1, and overall full coverage are 0% because next-iteration behavior is not implemented, and the current NFR audit has a security FAIL from production dependency vulnerabilities.",
+  "criteria": {
+    "p0_coverage": "NOT_MET",
+    "p1_coverage": "NOT_MET",
+    "overall_coverage": "NOT_MET",
+    "current_test_execution": "MET",
+    "nfr_status": "NOT_MET",
+    "critical_risks": "NOT_MET"
+  },
+  "waiver": null
+}
